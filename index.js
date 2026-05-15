@@ -195,7 +195,7 @@ app.post("/webhook", async (req, res) => {
         const data = event.postback.data;
 
         if (data === "action=today") {
-          await replyMessage(replyToken, "⏳ กำลังดึงข้อมูลจาก Strava...");
+          await pushMessage(userId, "⏳ กำลังดึงข้อมูลจาก Strava...");
           const activities = await getStravaActivities(userId, 1);
           if (!activities) {
             await pushMessage(userId, "❌ ยังไม่ได้เชื่อม Strava นะคะ\nพิมพ์ /connect เพื่อเชื่อมต่อค่ะ");
@@ -203,7 +203,7 @@ app.post("/webhook", async (req, res) => {
             await pushMessage(userId, formatActivities(activities, "วันนี้"));
           }
         } else if (data === "action=week") {
-          await replyMessage(replyToken, "⏳ กำลังดึงข้อมูลสัปดาห์นี้...");
+          await pushMessage(userId, "⏳ กำลังดึงข้อมูลสัปดาห์นี้...");
           const activities = await getStravaActivities(userId, 7);
           if (!activities) {
             await pushMessage(userId, "❌ ยังไม่ได้เชื่อม Strava นะคะ\nพิมพ์ /connect เพื่อเชื่อมต่อค่ะ");
@@ -211,7 +211,7 @@ app.post("/webhook", async (req, res) => {
             await pushMessage(userId, formatActivities(activities, "สัปดาห์นี้"));
           }
         } else if (data === "action=plan") {
-          await replyMessage(replyToken, "⏳ กำลังสร้างตารางซ้อม...");
+          await pushMessage(userId, "⏳ กำลังสร้างตารางซ้อม...");
           const activities = await getStravaActivities(userId, 28);
           if (!activities) {
             await pushMessage(userId, "❌ ยังไม่ได้เชื่อม Strava นะคะ\nพิมพ์ /connect เพื่อเชื่อมต่อค่ะ");
@@ -222,13 +222,13 @@ app.post("/webhook", async (req, res) => {
           }
         } else if (data === "action=recovery") {
           userSessions[userId] = { waitingFor: "recovery_image" };
-          await replyMessage(replyToken, "📸 ส่งรูป screenshot จาก Zepp App มาได้เลยค่ะ\nจะวิเคราะห์ Recovery และแนะนำแผนซ้อมวันนี้ให้นะคะ 💪");
+          await pushMessage(userId, "📸 ส่งรูป screenshot จาก Zepp App มาได้เลยค่ะ\nจะวิเคราะห์ Recovery และแนะนำแผนซ้อมวันนี้ให้นะคะ 💪");
         } else if (data === "action=goal") {
           userSessions[userId] = { waitingFor: "goal_input" };
-          await replyMessage(replyToken, "🎯 พิมพ์เป้าหมายของคุณได้เลยค่ะ\nเช่น: อยากวิ่ง 100km ต่อเดือน หรือ เตรียมแข่ง Half Marathon ธันวาคมนี้");
+          await pushMessage(userId, "🎯 พิมพ์เป้าหมายของคุณได้เลยค่ะ\nเช่น: อยากวิ่ง 100km ต่อเดือน หรือ เตรียมแข่ง Half Marathon ธันวาคมนี้");
         } else if (data === "action=chat") {
           userSessions[userId] = { waitingFor: "free_chat" };
-          await replyMessage(replyToken, "💬 ถามอะไรเกี่ยวกับการวิ่งได้เลยค่ะ! 🏃");
+          await pushMessage(userId, "💬 ถามอะไรเกี่ยวกับการวิ่งได้เลยค่ะ! 🏃");
         }
       }
 
@@ -238,7 +238,7 @@ app.post("/webhook", async (req, res) => {
 
         // รูปภาพ → วิเคราะห์ Recovery
         if (event.message.type === "image") {
-          await replyMessage(replyToken, "⏳ กำลังวิเคราะห์ Recovery ของคุณ...");
+          await pushMessage(userId, "⏳ กำลังวิเคราะห์ Recovery ของคุณ...");
 
           // ดึงรูปจาก LINE
           const imgRes = await axios.get(
@@ -269,7 +269,7 @@ app.post("/webhook", async (req, res) => {
           // Command: เชื่อม Strava
           if (text === "/connect") {
             const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
-            await replyMessage(replyToken, `🔗 คลิกลิงก์นี้เพื่อเชื่อม Strava นะคะ:\n${authUrl}`);
+            await pushMessage(userId, `🔗 คลิกลิงก์นี้เพื่อเชื่อม Strava นะคะ:\n${authUrl}`);
           }
 
           // รอ Goal input
@@ -278,14 +278,14 @@ app.post("/webhook", async (req, res) => {
             const activities = await getStravaActivities(userId, 28);
             const summary = activities ? formatActivities(activities, "4 สัปดาห์ที่ผ่านมา") : "ยังไม่มีข้อมูล Strava";
             const plan = await generateTrainingPlan(summary, { goal: text });
-            await replyMessage(replyToken, plan);
+            await pushMessage(userId, plan);
             userSessions[userId] = {};
           }
 
           // Free chat
           else {
             const response = await analyzeWithClaude(text);
-            await replyMessage(replyToken, response);
+            await pushMessage(userId, response);
           }
         }
       }
