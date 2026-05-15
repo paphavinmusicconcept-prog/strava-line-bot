@@ -5,9 +5,11 @@ const Anthropic = require("@anthropic-ai/sdk");
 const app = express();
 app.use(express.json());
 
+PORT: process.env.PORT || 3000,
+
 // ===== CONFIG (ใส่ค่าของคุณตรงนี้) =====
 const CONFIG = {
-  LINE_CHANNEL_ACCESS_TOKEN: "2010095441",
+  LINE_CHANNEL_ACCESS_TOKEN: "prdRXFUvw29fTtaGIWHdDBlgbnvyCfAZAymQfa2S/4oNSaU1hotoafTZS0jXBj9/Nx4bW61+w5Mi8Js+C97zY8EmoZWkbmJ2aeASkCCAFNe+gAz/adMAqe8sGudZ5VeAkPJ04poALM337V/2hbYGRAdB04t89/1O/w1cDnyilFU=",
   LINE_CHANNEL_SECRET: "4a909548f64bb32a64fd29e3e212569d",
   ANTHROPIC_API_KEY: "YOUR_ANTHROPIC_API_KEY",
   STRAVA_CLIENT_ID: "245605",
@@ -322,6 +324,6 @@ app.get("/strava/callback", async (req, res) => {
 });
 
 // ===== START SERVER =====
-app.listen(CONFIG.PORT, () => {
-  console.log(`🚀 Bot running on port ${CONFIG.PORT}`);
+app.listen(process.env.PORT || 3000, () => {
+  console.log(`🚀 Bot running on port ${process.env.PORT || 3000}`);
 });
