@@ -5,38 +5,34 @@ const Anthropic = require("@anthropic-ai/sdk");
 const app = express();
 app.use(express.json());
 
-// ===== CONFIG (ใส่ค่าของคุณตรงนี้) =====
 const CONFIG = {
   LINE_CHANNEL_ACCESS_TOKEN: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   LINE_CHANNEL_SECRET: process.env.LINE_CHANNEL_SECRET,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-  STRAVA_CLIENT_ID: process.env.STRAVA_CLIENT_ID,
-  STRAVA_CLIENT_SECRET: process.env.STRAVA_CLIENT_SECRET,
   SERVER_URL: "https://strava-line-bot-production.up.railway.app",
 };
 
 const anthropic = new Anthropic({ apiKey: CONFIG.ANTHROPIC_API_KEY });
 
-// ===== STRAVA TOKEN STORE (เก็บ token ของแต่ละ user) =====
-// Production ควรใช้ database แทน
+// เก็บ token และ config ของแต่ละ user
 const stravaTokens = {};
-// stravaTokens[lineUserId] = { access_token, refresh_token, expires_at }
+const userStravaConfig = {}; // { userId: { clientId, clientSecret } }
+const userSessions = {};
 
 // ===== STRAVA HELPERS =====
 async function refreshStravaToken(lineUserId) {
   const tokenData = stravaTokens[lineUserId];
-  if (!tokenData) return null;
+  const stravaConfig = userStravaConfig[lineUserId];
+  if (!tokenData || !stravaConfig) return null;
 
-  // ถ้า token ยังไม่หมดอายุ ใช้ได้เลย
   if (tokenData.expires_at > Date.now() / 1000 + 60) {
     return tokenData.access_token;
   }
 
-  // Refresh token
   try {
     const res = await axios.post("https://www.strava.com/oauth/token", {
-      client_id: CONFIG.STRAVA_CLIENT_ID,
-      client_secret: CONFIG.STRAVA_CLIENT_SECRET,
+      client_id: stravaConfig.clientId,
+      client_secret: stravaConfig.clientSecret,
       grant_type: "refresh_token",
       refresh_token: tokenData.refresh_token,
     });
@@ -70,6 +66,8 @@ function formatActivities(activities, label) {
   }
 
   const runs = activities.filter((a) => a.type === "Run");
+  if (runs.length === 0) return `ไม่มีข้อมูลการวิ่ง${label}ค่ะ 😴`;
+
   const totalDistance = runs.reduce((s, a) => s + a.distance, 0) / 1000;
   const totalTime = runs.reduce((s, a) => s + a.moving_time, 0);
   const avgPace = totalTime / 60 / totalDistance;
@@ -82,7 +80,6 @@ function formatActivities(activities, label) {
   msg += `📏 รวม: ${totalDistance.toFixed(2)} km\n`;
   msg += `⏱ Pace เฉลี่ย: ${avgPaceMin}:${String(avgPaceSec).padStart(2, "0")} /km\n`;
   msg += `🔥 แคลอรี่: ${runs.reduce((s, a) => s + (a.kilojoules || 0), 0).toFixed(0)} kJ\n\n`;
-
   msg += `📋 รายละเอียด:\n`;
   runs.slice(0, 5).forEach((a) => {
     const dist = (a.distance / 1000).toFixed(2);
@@ -90,9 +87,7 @@ function formatActivities(activities, label) {
     const pMin = Math.floor(pace);
     const pSec = Math.round((pace - pMin) * 60);
     const date = new Date(a.start_date_local).toLocaleDateString("th-TH", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
+      weekday: "short", day: "numeric", month: "short",
     });
     msg += `• ${date}: ${dist}km @ ${pMin}:${String(pSec).padStart(2, "0")}/km\n`;
   });
@@ -108,14 +103,7 @@ async function analyzeWithClaude(prompt, imageBase64 = null) {
     messages.push({
       role: "user",
       content: [
-        {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: "image/jpeg",
-            data: imageBase64,
-          },
-        },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } },
         { type: "text", text: prompt },
       ],
     });
@@ -128,7 +116,7 @@ async function analyzeWithClaude(prompt, imageBase64 = null) {
     max_tokens: 1000,
     system: `คุณเป็น AI Coach นักวิ่งผู้เชี่ยวชาญ ตอบภาษาไทยเสมอ 
 ให้คำแนะนำที่เป็นประโยชน์ กระชับ และ motivate ผู้ใช้
-ถ้าวิเคราะห์รูป Recovery จาก Zepp App ให้อ่านค่าต่างๆ แล้วแนะนำแผนซ้อมวันนี้ที่เหมาะสม`,
+ถ้าวิเคราะห์รูป Recovery จากแอปออกกำลังกาย ให้อ่านค่าต่างๆ แล้วแนะนำแผนซ้อมวันนี้ที่เหมาะสม`,
     messages,
   });
 
@@ -150,48 +138,25 @@ ${userPrefs.daysPerWeek ? `ซ้อมได้: ${userPrefs.daysPerWeek} ว�
 }
 
 // ===== LINE MESSAGING =====
-async function replyMessage(replyToken, text) {
-  await axios.post(
-    "https://api.line.me/v2/bot/message/reply",
-    {
-      replyToken,
-      messages: [{ type: "text", text }],
-    },
-    {
-      headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` },
-    }
-  );
-}
-
 async function pushMessage(userId, text) {
   await axios.post(
     "https://api.line.me/v2/bot/message/push",
-    {
-      to: userId,
-      messages: [{ type: "text", text }],
-    },
-    {
-      headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` },
-    }
+    { to: userId, messages: [{ type: "text", text }] },
+    { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` } }
   );
 }
-
-// ===== USER SESSION (เก็บ state การคุย) =====
-const userSessions = {};
 
 // ===== WEBHOOK HANDLER =====
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
-
   const events = req.body.events || [];
 
   for (const event of events) {
     const userId = event.source?.userId || event.source?.groupId || event.source?.roomId;
     console.log("userId:", userId, "event type:", event.type);
-    const replyToken = event.replyToken;
 
     try {
-      // ---- Handle Postback (Rich Menu buttons) ----
+      // ---- Handle Postback (Rich Menu) ----
       if (event.type === "postback") {
         const data = event.postback.data;
 
@@ -223,7 +188,7 @@ app.post("/webhook", async (req, res) => {
           }
         } else if (data === "action=recovery") {
           userSessions[userId] = { waitingFor: "recovery_image" };
-          await pushMessage(userId, "📸 ส่งรูป screenshot จาก Zepp App มาได้เลยค่ะ\nจะวิเคราะห์ Recovery และแนะนำแผนซ้อมวันนี้ให้นะคะ 💪");
+          await pushMessage(userId, "📸 ส่งรูป screenshot จากแอปออกกำลังกายของคุณมาได้เลยค่ะ\nจะวิเคราะห์ Recovery และแนะนำแผนซ้อมวันนี้ให้นะคะ 💪");
         } else if (data === "action=goal") {
           userSessions[userId] = { waitingFor: "goal_input" };
           await pushMessage(userId, "🎯 พิมพ์เป้าหมายของคุณได้เลยค่ะ\nเช่น: อยากวิ่ง 100km ต่อเดือน หรือ เตรียมแข่ง Half Marathon ธันวาคมนี้");
@@ -237,28 +202,26 @@ app.post("/webhook", async (req, res) => {
       if (event.type === "message") {
         const session = userSessions[userId] || {};
 
+        // ---- Follow event: แอดเพื่อนใหม่ ----
+        if (event.type === "follow" || session.waitingFor === undefined && !stravaTokens[userId]) {
+          // จะถามใน follow event ด้านล่าง
+        }
+
         // รูปภาพ → วิเคราะห์ Recovery
         if (event.message.type === "image") {
           await pushMessage(userId, "⏳ กำลังวิเคราะห์ Recovery ของคุณ...");
-
-          // ดึงรูปจาก LINE
           const imgRes = await axios.get(
             `https://api-data.line.me/v2/bot/message/${event.message.id}/content`,
-            {
-              headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` },
-              responseType: "arraybuffer",
-            }
+            { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` }, responseType: "arraybuffer" }
           );
-
           const imageBase64 = Buffer.from(imgRes.data).toString("base64");
           const analysis = await analyzeWithClaude(
-            `วิเคราะห์รูป Recovery จาก Zepp App นี้ให้หน่อยค่ะ 
-อ่านค่าต่างๆ เช่น Readiness score, BioCharge, HRV, Sleep score หรืออะไรก็ตามที่เห็นในรูป
+            `วิเคราะห์รูป Recovery จากแอปออกกำลังกายนี้ให้หน่อยค่ะ
+อ่านค่าต่างๆ เช่น Readiness score, Recovery score, HRV, Sleep score หรืออะไรก็ตามที่เห็นในรูป
 แล้วแนะนำว่าวันนี้ควรซ้อมแบบไหน หนักหรือเบา หรือควรพัก
 ตอบเป็นภาษาไทยนะคะ`,
             imageBase64
           );
-
           await pushMessage(userId, analysis);
           userSessions[userId] = {};
         }
@@ -267,10 +230,32 @@ app.post("/webhook", async (req, res) => {
         else if (event.message.type === "text") {
           const text = event.message.text.trim();
 
-          // Command: เชื่อม Strava
-          if (text === "/connect") {
-            const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
-            await pushMessage(userId, `🔗 คลิกลิงก์นี้เพื่อเชื่อม Strava นะคะ:\n${authUrl}`);
+          // รอ Client ID
+          if (session.waitingFor === "strava_client_id") {
+            userStravaConfig[userId] = { clientId: text };
+            userSessions[userId] = { waitingFor: "strava_client_secret" };
+            await pushMessage(userId, "✅ ได้รับ Client ID แล้วค่ะ\n\nตอนนี้ใส่ **Client Secret** ได้เลยค่ะ");
+          }
+
+          // รอ Client Secret
+          else if (session.waitingFor === "strava_client_secret") {
+            userStravaConfig[userId].clientSecret = text;
+            userSessions[userId] = {};
+            const { clientId } = userStravaConfig[userId];
+            const authUrl = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
+            await pushMessage(userId, `✅ ได้รับ Client Secret แล้วค่ะ!\n\n🔗 กดลิงก์นี้เพื่อเชื่อม Strava ได้เลยค่ะ:\n${authUrl}`);
+          }
+
+          // Command: /connect
+          else if (text === "/connect") {
+            if (!userStravaConfig[userId]?.clientId) {
+              userSessions[userId] = { waitingFor: "strava_client_id" };
+              await pushMessage(userId, `🔗 มาเชื่อม Strava กันเลยค่ะ!\n\nก่อนอื่นต้องไปสร้าง Strava API ก่อนนะคะ:\n1. ไปที่ strava.com/settings/api\n2. สร้าง Application\n3. คัดลอก Client ID มาใส่ได้เลยค่ะ\n\n📝 ใส่ Strava Client ID ของคุณได้เลยค่ะ:`);
+            } else {
+              const { clientId } = userStravaConfig[userId];
+              const authUrl = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
+              await pushMessage(userId, `🔗 คลิกลิงก์นี้เพื่อเชื่อม Strava นะคะ:\n${authUrl}`);
+            }
           }
 
           // รอ Goal input
@@ -290,9 +275,16 @@ app.post("/webhook", async (req, res) => {
           }
         }
       }
-   } catch (err) {
-  console.error("Event error:", err.message);
-  console.error("Event error detail:", JSON.stringify(err.response?.data));
+
+      // ---- Follow event: แอดเพื่อนใหม่ ----
+      if (event.type === "follow") {
+        userSessions[userId] = { waitingFor: "strava_client_id" };
+        await pushMessage(userId, `🏃 สวัสดีค่ะ! ยินดีต้อนรับสู่ อาจารย์นักวิ่ง!\n\nก่อนเริ่มใช้งาน ต้องเชื่อม Strava ก่อนนะคะ\n\nไปที่ strava.com/settings/api แล้วสร้าง Application จากนั้นคัดลอก Client ID มาใส่ได้เลยค่ะ 👇`);
+      }
+
+    } catch (err) {
+      console.error("Event error:", err.message);
+      console.error("Event error detail:", JSON.stringify(err.response?.data));
     }
   }
 });
@@ -300,11 +292,17 @@ app.post("/webhook", async (req, res) => {
 // ===== STRAVA OAUTH CALLBACK =====
 app.get("/strava/callback", async (req, res) => {
   const { code, lineUserId } = req.query;
+  const stravaConfig = userStravaConfig[lineUserId];
+
+  if (!stravaConfig) {
+    res.send("<h2>❌ ไม่พบข้อมูล กรุณาเริ่มใหม่ที่ LINE ค่ะ</h2>");
+    return;
+  }
 
   try {
     const tokenRes = await axios.post("https://www.strava.com/oauth/token", {
-      client_id: CONFIG.STRAVA_CLIENT_ID,
-      client_secret: CONFIG.STRAVA_CLIENT_SECRET,
+      client_id: stravaConfig.clientId,
+      client_secret: stravaConfig.clientSecret,
       code,
       grant_type: "authorization_code",
     });
@@ -316,7 +314,6 @@ app.get("/strava/callback", async (req, res) => {
     };
 
     await pushMessage(lineUserId, `✅ เชื่อม Strava สำเร็จแล้วค่ะ!\nยินดีต้อนรับ ${tokenRes.data.athlete.firstname} 🎉\nตอนนี้ใช้ Rich Menu ด้านล่างได้เลยนะคะ 🏃`);
-
     res.send("<h2>✅ เชื่อม Strava สำเร็จแล้ว! กลับไปที่ LINE ได้เลยค่ะ</h2>");
   } catch (err) {
     console.error("Strava OAuth error:", err.message);
@@ -325,6 +322,6 @@ app.get("/strava/callback", async (req, res) => {
 });
 
 // ===== START SERVER =====
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log(`🚀 Bot running on port ${process.env.PORT || 3000}`);
 });
