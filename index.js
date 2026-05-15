@@ -5,8 +5,6 @@ const Anthropic = require("@anthropic-ai/sdk");
 const app = express();
 app.use(express.json());
 
-PORT: process.env.PORT || 3000,
-
 // ===== CONFIG (ใส่ค่าของคุณตรงนี้) =====
 const CONFIG = {
   LINE_CHANNEL_ACCESS_TOKEN: "prdRXFUvw29fTtaGIWHdDBlgbnvyCfAZAymQfa2S/4oNSaU1hotoafTZS0jXBj9/Nx4bW61+w5Mi8Js+C97zY8EmoZWkbmJ2aeASkCCAFNe+gAz/adMAqe8sGudZ5VeAkPJ04poALM337V/2hbYGRAdB04t89/1O/w1cDnyilFU=",
