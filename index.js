@@ -124,7 +124,7 @@ async function analyzeWithClaude(prompt, imageBase64 = null) {
   }
 
   const res = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-5-20251001",
     max_tokens: 1000,
     system: `คุณเป็น AI Coach นักวิ่งผู้เชี่ยวชาญ ตอบภาษาไทยเสมอ 
 ให้คำแนะนำที่เป็นประโยชน์ กระชับ และ motivate ผู้ใช้
