@@ -186,7 +186,8 @@ app.post("/webhook", async (req, res) => {
   const events = req.body.events || [];
 
   for (const event of events) {
-    const userId = event.source?.userId;
+    const userId = event.source?.userId || event.source?.groupId || event.source?.roomId;
+    console.log("userId:", userId, "event type:", event.type);
     const replyToken = event.replyToken;
 
     try {
