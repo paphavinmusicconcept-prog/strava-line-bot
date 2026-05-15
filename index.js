@@ -7,11 +7,12 @@ app.use(express.json());
 
 // ===== CONFIG (ใส่ค่าของคุณตรงนี้) =====
 const CONFIG = {
-  LINE_CHANNEL_ACCESS_TOKEN: "prdRXFUvw29fTtaGIWHdDBlgbnvyCfAZAymQfa2S/4oNSaU1hotoafTZS0jXBj9/Nx4bW61+w5Mi8Js+C97zY8EmoZWkbmJ2aeASkCCAFNe+gAz/adMAqe8sGudZ5VeAkPJ04poALM337V/2hbYGRAdB04t89/1O/w1cDnyilFU=",
-  LINE_CHANNEL_SECRET: "4a909548f64bb32a64fd29e3e212569d",
-  ANTHROPIC_API_KEY: "YOUR_ANTHROPIC_API_KEY",
-  STRAVA_CLIENT_ID: "245605",
-  STRAVA_CLIENT_SECRET: "da895ec346dc7fcf51e684ac1bbe8e48a08ec765",
+  LINE_CHANNEL_ACCESS_TOKEN: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  LINE_CHANNEL_SECRET: process.env.LINE_CHANNEL_SECRET,
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  STRAVA_CLIENT_ID: process.env.STRAVA_CLIENT_ID,
+  STRAVA_CLIENT_SECRET: process.env.STRAVA_CLIENT_SECRET,
+  SERVER_URL: "https://strava-line-bot-production.up.railway.app",
 };
 
 const anthropic = new Anthropic({ apiKey: CONFIG.ANTHROPIC_API_KEY });
@@ -267,7 +268,7 @@ app.post("/webhook", async (req, res) => {
 
           // Command: เชื่อม Strava
           if (text === "/connect") {
-            const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`https://YOUR_SERVER_URL/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
+            const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
             await replyMessage(replyToken, `🔗 คลิกลิงก์นี้เพื่อเชื่อม Strava นะคะ:\n${authUrl}`);
           }
 
