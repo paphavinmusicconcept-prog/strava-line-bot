@@ -289,8 +289,9 @@ app.post("/webhook", async (req, res) => {
           }
         }
       }
-    } catch (err) {
-      console.error("Event error:", err.message);
+   } catch (err) {
+  console.error("Event error:", err.message);
+  console.error("Event error detail:", JSON.stringify(err.response?.data));
     }
   }
 });
