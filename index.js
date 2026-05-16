@@ -9,30 +9,57 @@ const CONFIG = {
   LINE_CHANNEL_ACCESS_TOKEN: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   LINE_CHANNEL_SECRET: process.env.LINE_CHANNEL_SECRET,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  STRAVA_CLIENT_ID: process.env.STRAVA_CLIENT_ID,
+  STRAVA_CLIENT_SECRET: process.env.STRAVA_CLIENT_SECRET,
   SERVER_URL: "https://strava-line-bot-production.up.railway.app",
 };
 
 const anthropic = new Anthropic({ apiKey: CONFIG.ANTHROPIC_API_KEY });
 
-// เก็บ token และ config ของแต่ละ user
-const stravaTokens = {};
-const userStravaConfig = {}; // { userId: { clientId, clientSecret } }
+// ===== DATA STORE =====
 const userSessions = {};
+const userChallenges = {};
+const userActivities = {}; // เก็บ stat จากรูป/GPX
+const userPRs = {};
+const stravaTokens = {}; // เก็บ Strava token ของ user ที่เชื่อมไว้
+
+// ===== HELPERS =====
+function hasStrava(userId) {
+  return !!stravaTokens[userId];
+}
+
+function saveActivity(userId, activity) {
+  if (!userActivities[userId]) userActivities[userId] = [];
+  userActivities[userId].unshift(activity);
+  if (userActivities[userId].length > 200) userActivities[userId].pop();
+}
+
+function getRecentActivities(userId, days = 7) {
+  if (!userActivities[userId]) return [];
+  const cutoff = Date.now() - days * 86400000;
+  return userActivities[userId].filter(a => new Date(a.date).getTime() > cutoff);
+}
+
+function calcStatsFromActivities(activities) {
+  if (!activities || activities.length === 0) return null;
+  const totalDistance = activities.reduce((s, a) => s + (a.distance || 0), 0);
+  const totalCalories = activities.reduce((s, a) => s + (a.calories || 0), 0);
+  const paces = activities.filter(a => a.pace).map(a => a.pace);
+  const avgPaceDecimal = paces.length > 0 ? paces.reduce((s, p) => s + p, 0) / paces.length : 0;
+  const avgPaceMin = Math.floor(avgPaceDecimal);
+  const avgPaceSec = Math.round((avgPaceDecimal - avgPaceMin) * 60);
+  return { count: activities.length, totalDistance, totalCalories, avgPaceMin, avgPaceSec, activities };
+}
 
 // ===== STRAVA HELPERS =====
 async function refreshStravaToken(lineUserId) {
   const tokenData = stravaTokens[lineUserId];
-  const stravaConfig = userStravaConfig[lineUserId];
-  if (!tokenData || !stravaConfig) return null;
-
-  if (tokenData.expires_at > Date.now() / 1000 + 60) {
-    return tokenData.access_token;
-  }
-
+  if (!tokenData) return null;
+  if (tokenData.expires_at > Date.now() / 1000 + 60) return tokenData.access_token;
   try {
     const res = await axios.post("https://www.strava.com/oauth/token", {
-      client_id: stravaConfig.clientId,
-      client_secret: stravaConfig.clientSecret,
+      client_id: CONFIG.STRAVA_CLIENT_ID,
+      client_secret: CONFIG.STRAVA_CLIENT_SECRET,
       grant_type: "refresh_token",
       refresh_token: tokenData.refresh_token,
     });
@@ -51,7 +78,6 @@ async function refreshStravaToken(lineUserId) {
 async function getStravaActivities(lineUserId, days = 7) {
   const token = await refreshStravaToken(lineUserId);
   if (!token) return null;
-
   const after = Math.floor((Date.now() - days * 86400000) / 1000);
   const res = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
     headers: { Authorization: `Bearer ${token}` },
@@ -60,45 +86,93 @@ async function getStravaActivities(lineUserId, days = 7) {
   return res.data;
 }
 
-function formatActivities(activities, label) {
-  if (!activities || activities.length === 0) {
-    return `ไม่มีกิจกรรม${label}ค่ะ 😴`;
-  }
-
-  const runs = activities.filter((a) => a.type === "Run");
-  if (runs.length === 0) return `ไม่มีข้อมูลการวิ่ง${label}ค่ะ 😴`;
-
-  const totalDistance = runs.reduce((s, a) => s + a.distance, 0) / 1000;
-  const totalTime = runs.reduce((s, a) => s + a.moving_time, 0);
-  const avgPace = totalTime / 60 / totalDistance;
-  const avgPaceMin = Math.floor(avgPace);
-  const avgPaceSec = Math.round((avgPace - avgPaceMin) * 60);
-
-  let msg = `🏃 สรุปการวิ่ง${label}\n`;
-  msg += `━━━━━━━━━━━━━━\n`;
-  msg += `📍 จำนวน: ${runs.length} ครั้ง\n`;
-  msg += `📏 รวม: ${totalDistance.toFixed(2)} km\n`;
-  msg += `⏱ Pace เฉลี่ย: ${avgPaceMin}:${String(avgPaceSec).padStart(2, "0")} /km\n`;
-  msg += `🔥 แคลอรี่: ${runs.reduce((s, a) => s + (a.kilojoules || 0), 0).toFixed(0)} kJ\n\n`;
-  msg += `📋 รายละเอียด:\n`;
-  runs.slice(0, 5).forEach((a) => {
-    const dist = (a.distance / 1000).toFixed(2);
-    const pace = a.moving_time / 60 / (a.distance / 1000);
-    const pMin = Math.floor(pace);
-    const pSec = Math.round((pace - pMin) * 60);
-    const date = new Date(a.start_date_local).toLocaleDateString("th-TH", {
-      weekday: "short", day: "numeric", month: "short",
+function convertStravaToActivities(stravaData) {
+  return stravaData
+    .filter(a => a.type === "Run")
+    .map(a => {
+      const dist = a.distance / 1000;
+      const pace = (a.moving_time / 60) / dist;
+      return {
+        date: a.start_date_local,
+        distance: parseFloat(dist.toFixed(2)),
+        pace: parseFloat(pace.toFixed(4)),
+        duration: parseFloat((a.moving_time / 60).toFixed(1)),
+        calories: a.kilojoules || 0,
+        elevGain: a.total_elevation_gain || 0,
+        source: "Strava",
+        name: a.name,
+      };
     });
-    msg += `• ${date}: ${dist}km @ ${pMin}:${String(pSec).padStart(2, "0")}/km\n`;
-  });
+}
 
-  return msg;
+async function getActivitiesForUser(userId, days = 7) {
+  if (hasStrava(userId)) {
+    const stravaData = await getStravaActivities(userId, days);
+    if (stravaData) return convertStravaToActivities(stravaData);
+  }
+  return getRecentActivities(userId, days);
+}
+
+// ===== PR CHECKER =====
+function checkPR(userId, activity) {
+  if (!userPRs[userId]) userPRs[userId] = { longestRun: 0, fastestPace: 9999 };
+  const pr = userPRs[userId];
+  const prs = [];
+  if (activity.distance && activity.distance > pr.longestRun) {
+    prs.push(`🏅 PR ระยะทาง! ${activity.distance.toFixed(2)}km (เดิม ${pr.longestRun.toFixed(2)}km)`);
+    pr.longestRun = activity.distance;
+  }
+  if (activity.pace && activity.pace > 0 && activity.pace < pr.fastestPace) {
+    const pMin = Math.floor(activity.pace);
+    const pSec = Math.round((activity.pace - pMin) * 60);
+    const oldMin = Math.floor(pr.fastestPace);
+    const oldSec = Math.round((pr.fastestPace - oldMin) * 60);
+    prs.push(`⚡ PR Pace! ${pMin}:${String(pSec).padStart(2,"0")}/km (เดิม ${oldMin}:${String(oldSec).padStart(2,"0")}/km)`);
+    pr.fastestPace = activity.pace;
+  }
+  return prs.length > 0 ? prs : null;
+}
+
+// ===== GPX PARSER =====
+function parseGPX(xmlText) {
+  try {
+    const points = [];
+    const trkptRegex = /<trkpt lat="([\d.-]+)" lon="([\d.-]+)"[^>]*>[\s\S]*?<ele>([\d.]+)<\/ele>[\s\S]*?<time>([^<]+)<\/time>/g;
+    let match;
+    while ((match = trkptRegex.exec(xmlText)) !== null) {
+      points.push({ lat: parseFloat(match[1]), lon: parseFloat(match[2]), ele: parseFloat(match[3]), time: new Date(match[4]) });
+    }
+    if (points.length < 2) return null;
+    let totalDist = 0, totalElevGain = 0;
+    for (let i = 1; i < points.length; i++) {
+      const p1 = points[i-1], p2 = points[i];
+      const R = 6371;
+      const dLat = (p2.lat - p1.lat) * Math.PI / 180;
+      const dLon = (p2.lon - p1.lon) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(p1.lat*Math.PI/180)*Math.cos(p2.lat*Math.PI/180)*Math.sin(dLon/2)**2;
+      totalDist += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      if (p2.ele > p1.ele) totalElevGain += p2.ele - p1.ele;
+    }
+    const duration = (points[points.length-1].time - points[0].time) / 1000 / 60;
+    const pace = duration / totalDist;
+    return {
+      date: points[0].time.toISOString(),
+      distance: parseFloat(totalDist.toFixed(2)),
+      pace: parseFloat(pace.toFixed(4)),
+      duration: parseFloat(duration.toFixed(1)),
+      elevGain: parseFloat(totalElevGain.toFixed(0)),
+      calories: 0,
+      source: "GPX",
+    };
+  } catch (e) {
+    console.error("GPX parse error:", e.message);
+    return null;
+  }
 }
 
 // ===== CLAUDE HELPERS =====
 async function analyzeWithClaude(prompt, imageBase64 = null) {
   const messages = [];
-
   if (imageBase64) {
     messages.push({
       role: "user",
@@ -110,43 +184,361 @@ async function analyzeWithClaude(prompt, imageBase64 = null) {
   } else {
     messages.push({ role: "user", content: prompt });
   }
-
   const res = await anthropic.messages.create({
     model: "claude-sonnet-4-5",
-    max_tokens: 1000,
-    system: `คุณเป็น AI Coach นักวิ่งผู้เชี่ยวชาญ ตอบภาษาไทยเสมอ 
+    max_tokens: 1500,
+    system: `คุณเป็น AI Coach นักวิ่งผู้เชี่ยวชาญ ตอบภาษาไทยเสมอ
 ให้คำแนะนำที่เป็นประโยชน์ กระชับ และ motivate ผู้ใช้
-ถ้าวิเคราะห์รูป Recovery จากแอปออกกำลังกาย ให้อ่านค่าต่างๆ แล้วแนะนำแผนซ้อมวันนี้ที่เหมาะสม`,
+เมื่อวิเคราะห์รูปผลการวิ่ง ให้อ่านข้อมูลและ return JSON ในรูปแบบนี้ก่อนเสมอ:
+{"distance": 8.5, "pace": 5.5, "duration": 46.75, "calories": 420, "elevGain": 120, "date": "2026-05-16"}
+โดย pace ให้เป็นตัวเลขทศนิยม เช่น 5:30/km = 5.5
+แล้วค่อยให้ feedback เป็นภาษาไทย`,
     messages,
   });
-
   return res.content[0].text;
 }
 
-async function generateTrainingPlan(stravaData, userPrefs = {}) {
-  const prompt = `จากข้อมูล Strava ของนักวิ่งด้านล่าง ช่วยสร้างตารางซ้อมสัปดาห์หน้าให้หน่อยค่ะ
+function extractActivityFromResponse(text) {
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*?"distance"[\s\S]*?\}/);
+    if (!jsonMatch) return null;
+    const data = JSON.parse(jsonMatch[0]);
+    if (!data.distance) return null;
+    return {
+      date: data.date || new Date().toISOString(),
+      distance: parseFloat(data.distance) || 0,
+      pace: parseFloat(data.pace) || 0,
+      duration: parseFloat(data.duration) || 0,
+      calories: parseFloat(data.calories) || 0,
+      elevGain: parseFloat(data.elevGain) || 0,
+      source: "Screenshot",
+    };
+  } catch (e) { return null; }
+}
 
-ข้อมูลการวิ่ง 4 สัปดาห์ที่ผ่านมา:
-${stravaData}
+// ===== FLEX MESSAGE BUILDERS =====
+function buildStatsFlexMessage(stats, label) {
+  if (!stats) return null;
+  const { count, totalDistance, avgPaceMin, avgPaceSec, totalCalories, activities } = stats;
+  const activityRows = activities.slice(0, 5).map((a) => {
+    const date = new Date(a.date).toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short" });
+    const pMin = Math.floor(a.pace || 0);
+    const pSec = Math.round(((a.pace || 0) - pMin) * 60);
+    return {
+      type: "box", layout: "horizontal", paddingTop: "4px",
+      contents: [
+        { type: "text", text: date, size: "sm", color: "#555555", flex: 3 },
+        { type: "text", text: `${(a.distance||0).toFixed(2)}km`, size: "sm", color: "#111111", flex: 2, align: "center" },
+        { type: "text", text: a.pace ? `${pMin}:${String(pSec).padStart(2,"0")}/km` : "-", size: "sm", color: "#E8703A", flex: 3, align: "end" },
+      ],
+    };
+  });
+  return {
+    type: "flex", altText: `🏃 สรุปการวิ่ง${label}`,
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box", layout: "vertical", backgroundColor: "#E8703A", paddingAll: "16px",
+        contents: [
+          { type: "text", text: "🏃 อาจารย์นักวิ่ง", color: "#ffffff", size: "sm", weight: "bold" },
+          { type: "text", text: `สรุปการวิ่ง${label}`, color: "#ffffff99", size: "xs" },
+        ],
+      },
+      body: {
+        type: "box", layout: "vertical", paddingAll: "16px",
+        contents: [
+          {
+            type: "box", layout: "horizontal",
+            contents: [
+              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+                { type: "text", text: `${totalDistance.toFixed(1)}`, size: "xl", weight: "bold", color: "#E8703A", align: "center" },
+                { type: "text", text: "km รวม", size: "xs", color: "#888888", align: "center" },
+              ]},
+              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+                { type: "text", text: `${count}`, size: "xl", weight: "bold", color: "#E8703A", align: "center" },
+                { type: "text", text: "ครั้ง", size: "xs", color: "#888888", align: "center" },
+              ]},
+              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+                { type: "text", text: avgPaceMin > 0 ? `${avgPaceMin}:${String(avgPaceSec).padStart(2,"0")}` : "-", size: "xl", weight: "bold", color: "#E8703A", align: "center" },
+                { type: "text", text: "pace /km", size: "xs", color: "#888888", align: "center" },
+              ]},
+            ],
+            paddingBottom: "12px",
+          },
+          { type: "separator" },
+          {
+            type: "box", layout: "horizontal", paddingTop: "12px", paddingBottom: "4px",
+            contents: [
+              { type: "text", text: "วันที่", size: "xs", color: "#888888", flex: 3 },
+              { type: "text", text: "ระยะ", size: "xs", color: "#888888", flex: 2, align: "center" },
+              { type: "text", text: "Pace", size: "xs", color: "#888888", flex: 3, align: "end" },
+            ],
+          },
+          ...activityRows,
+          { type: "separator", margin: "12px" },
+          {
+            type: "box", layout: "horizontal", paddingTop: "8px",
+            contents: [
+              { type: "text", text: "🔥 แคลอรี่รวม", size: "sm", color: "#555555" },
+              { type: "text", text: `${totalCalories.toFixed(0)} kcal`, size: "sm", color: "#E8703A", align: "end", weight: "bold" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
 
-${userPrefs.goal ? `เป้าหมาย: ${userPrefs.goal}` : ""}
-${userPrefs.daysPerWeek ? `ซ้อมได้: ${userPrefs.daysPerWeek} วัน/สัปดาห์` : ""}
+function buildCarouselMessage(activities) {
+  const runs = activities.slice(0, 5);
+  if (runs.length === 0) return null;
+  const bubbles = runs.map((a) => {
+    const pMin = Math.floor(a.pace || 0);
+    const pSec = Math.round(((a.pace || 0) - pMin) * 60);
+    const date = new Date(a.date).toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "short" });
+    return {
+      type: "bubble", size: "kilo",
+      header: {
+        type: "box", layout: "vertical", backgroundColor: "#E8703A", paddingAll: "12px",
+        contents: [
+          { type: "text", text: `📍 ${a.source || "Manual"}`, color: "#ffffff", size: "xs" },
+          { type: "text", text: date, color: "#ffffff", size: "sm", weight: "bold", wrap: true },
+        ],
+      },
+      body: {
+        type: "box", layout: "vertical", paddingAll: "12px",
+        contents: [
+          {
+            type: "box", layout: "horizontal", paddingBottom: "8px",
+            contents: [
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: `${(a.distance||0).toFixed(2)}`, size: "xxl", weight: "bold", color: "#E8703A", align: "center" },
+                { type: "text", text: "km", size: "xs", color: "#888888", align: "center" },
+              ]},
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: a.pace ? `${pMin}:${String(pSec).padStart(2,"0")}` : "-", size: "xl", weight: "bold", color: "#333333", align: "center" },
+                { type: "text", text: "/km", size: "xs", color: "#888888", align: "center" },
+              ]},
+            ],
+          },
+          { type: "separator" },
+          {
+            type: "box", layout: "horizontal", paddingTop: "8px",
+            contents: [
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: a.duration ? `${Math.floor(a.duration)}` : "-", size: "sm", color: "#333333", align: "center" },
+                { type: "text", text: "นาที", size: "xs", color: "#888888", align: "center" },
+              ]},
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: a.elevGain ? `${a.elevGain}m` : "-", size: "sm", color: "#333333", align: "center" },
+                { type: "text", text: "elevation", size: "xs", color: "#888888", align: "center" },
+              ]},
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: a.calories ? `${a.calories}` : "-", size: "sm", color: "#333333", align: "center" },
+                { type: "text", text: "kcal", size: "xs", color: "#888888", align: "center" },
+              ]},
+            ],
+          },
+        ],
+      },
+    };
+  });
+  return { type: "flex", altText: "📋 ประวัติวิ่ง 5 ครั้งล่าสุด", contents: { type: "carousel", contents: bubbles } };
+}
 
-สร้างตารางซ้อม 7 วัน พร้อมอธิบายสั้นๆ ว่าทำไมถึงแนะนำแบบนี้`;
+function buildChallengeFlexMessage(userId, currentKm) {
+  const challenge = userChallenges[userId];
+  if (!challenge) return null;
+  const progress = Math.min((currentKm / challenge.goal) * 100, 100);
+  const remaining = Math.max(challenge.goal - currentKm, 0);
+  const daysLeft = Math.max(Math.ceil((new Date(challenge.deadline) - new Date()) / 86400000), 0);
+  const progressBar = "█".repeat(Math.floor(progress / 10)) + "░".repeat(10 - Math.floor(progress / 10));
+  const color = progress >= 100 ? "#27AE60" : progress >= 50 ? "#E8703A" : "#E74C3C";
+  return {
+    type: "flex", altText: `🎯 Challenge: ${challenge.goal}km`,
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box", layout: "vertical", backgroundColor: color, paddingAll: "16px",
+        contents: [
+          { type: "text", text: "🎯 Challenge ของคุณ", color: "#ffffff", size: "sm", weight: "bold" },
+          { type: "text", text: progress >= 100 ? "🏆 สำเร็จแล้ว!" : `เหลืออีก ${daysLeft} วัน`, color: "#ffffff99", size: "xs" },
+        ],
+      },
+      body: {
+        type: "box", layout: "vertical", paddingAll: "16px",
+        contents: [
+          {
+            type: "box", layout: "horizontal", paddingBottom: "12px",
+            contents: [
+              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+                { type: "text", text: `${currentKm.toFixed(1)}`, size: "xxl", weight: "bold", color, align: "center" },
+                { type: "text", text: "km วิ่งแล้ว", size: "xs", color: "#888888", align: "center" },
+              ]},
+              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+                { type: "text", text: `${challenge.goal}`, size: "xxl", weight: "bold", color: "#333333", align: "center" },
+                { type: "text", text: "km เป้าหมาย", size: "xs", color: "#888888", align: "center" },
+              ]},
+            ],
+          },
+          { type: "text", text: `${progressBar} ${progress.toFixed(0)}%`, size: "sm", color, align: "center", margin: "md" },
+          { type: "separator", margin: "12px" },
+          {
+            type: "box", layout: "horizontal", paddingTop: "8px",
+            contents: [
+              { type: "text", text: progress >= 100 ? "🎉 ทำได้แล้วค่ะ!" : `เหลืออีก ${remaining.toFixed(1)} km`, size: "sm", color: "#555555" },
+              { type: "text", text: `${daysLeft} วัน`, size: "sm", color, align: "end", weight: "bold" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
 
-  return await analyzeWithClaude(prompt);
+function buildPRFlexMessage(prs, activityName) {
+  return {
+    type: "flex", altText: "🏅 คุณทำ PR แล้ว!",
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box", layout: "vertical", backgroundColor: "#F39C12", paddingAll: "16px",
+        contents: [
+          { type: "text", text: "🏅 Personal Record!", color: "#ffffff", size: "md", weight: "bold", align: "center" },
+          { type: "text", text: "ยอดเยี่ยมมากค่ะ! 🎉", color: "#ffffff99", size: "sm", align: "center" },
+        ],
+      },
+      body: {
+        type: "box", layout: "vertical", paddingAll: "16px",
+        contents: [
+          { type: "text", text: activityName, size: "sm", color: "#888888", align: "center" },
+          ...prs.map(pr => ({ type: "text", text: pr, size: "sm", color: "#333333", margin: "md", wrap: true, align: "center" })),
+          { type: "text", text: "ขอแสดงความยินดีด้วยนะคะ 💪", size: "sm", color: "#E8703A", margin: "lg", align: "center", weight: "bold" },
+        ],
+      },
+    },
+  };
+}
+
+
+// ===== UPDATE NOTIFICATION =====
+function buildUpdateNotificationFlex() {
+  return {
+    type: "flex",
+    altText: "🆕 อาจารย์นักวิ่ง AI Beta 2.0 - อัปเดตใหม่!",
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box", layout: "vertical", backgroundColor: "#1A1A2E", paddingAll: "16px",
+        contents: [
+          { type: "text", text: "🏃 อาจารย์นักวิ่ง AI", color: "#E8703A", size: "md", weight: "bold" },
+          { type: "text", text: "Beta 2.0 — มีอะไรใหม่บ้าง?", color: "#ffffff", size: "sm" },
+        ],
+      },
+      body: {
+        type: "box", layout: "vertical", paddingAll: "16px", spacing: "md",
+        contents: [
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "✨", size: "sm", flex: 0 },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "Flex Message", size: "sm", weight: "bold", color: "#E8703A" },
+                { type: "text", text: "สถิติแสดงเป็น Card สวยงาม", size: "xs", color: "#888888", wrap: true },
+              ]},
+            ],
+          },
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "🎯", size: "sm", flex: 0 },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "Challenge ตั้งเป้า", size: "sm", weight: "bold", color: "#E8703A" },
+                { type: "text", text: "ตั้งเป้า km/เดือน พร้อม progress bar", size: "xs", color: "#888888", wrap: true },
+              ]},
+            ],
+          },
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "🏅", size: "sm", flex: 0 },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "ตรวจจับ PR อัตโนมัติ", size: "sm", weight: "bold", color: "#E8703A" },
+                { type: "text", text: "แจ้งเตือนทันทีเมื่อทำ Personal Record", size: "xs", color: "#888888", wrap: true },
+              ]},
+            ],
+          },
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "📸", size: "sm", flex: 0 },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "อ่านรูป + ไฟล์ GPX", size: "sm", weight: "bold", color: "#E8703A" },
+                { type: "text", text: "ส่งรูป screenshot หรือไฟล์ .gpx บันทึก stat ได้เลย", size: "xs", color: "#888888", wrap: true },
+              ]},
+            ],
+          },
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "📊", size: "sm", flex: 0 },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "ดึงข้อมูล Strava 6 เดือน", size: "sm", weight: "bold", color: "#E8703A" },
+                { type: "text", text: "เชื่อม Strava ครั้งเดียว ดึงประวัติย้อนหลัง 6 เดือนเลย", size: "xs", color: "#888888", wrap: true },
+              ]},
+            ],
+          },
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "🌅", size: "sm", flex: 0 },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "แจ้งเตือนวันจันทร์อัตโนมัติ", size: "sm", weight: "bold", color: "#E8703A" },
+                { type: "text", text: "รับสรุปสัปดาห์ทุกเช้าวันจันทร์ 8.00น.", size: "xs", color: "#888888", wrap: true },
+              ]},
+            ],
+          },
+          { type: "separator", margin: "md" },
+          {
+            type: "box", layout: "horizontal", paddingTop: "8px",
+            contents: [
+              { type: "text", text: "💬 พิมพ์ /update เพื่อดูอีกครั้ง", size: "xs", color: "#aaaaaa", align: "center" },
+            ],
+          },
+        ],
+      },
+      footer: {
+        type: "box", layout: "vertical", backgroundColor: "#F5F5F5", paddingAll: "12px",
+        contents: [
+          { type: "text", text: "🏃 อาจารย์นักวิ่ง AI Beta 2.0", size: "xs", color: "#888888", align: "center" },
+        ],
+      },
+    },
+  };
 }
 
 // ===== LINE MESSAGING =====
-async function pushMessage(userId, text) {
+function makeQuickReply(items) {
+  return { items: items.map(i => ({ type: "action", action: { type: "message", label: i.label, text: i.text } })) };
+}
+
+async function pushMessage(userId, text, quickReply = null) {
   await axios.post(
     "https://api.line.me/v2/bot/message/push",
-    { to: userId, messages: [{ type: "text", text }] },
+    { to: userId, messages: [{ type: "text", text, ...(quickReply ? { quickReply } : {}) }] },
     { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` } }
   );
 }
 
-// ===== WEBHOOK HANDLER =====
+async function pushFlexMessage(userId, flexContent) {
+  await axios.post(
+    "https://api.line.me/v2/bot/message/push",
+    { to: userId, messages: [flexContent] },
+    { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` } }
+  );
+}
+
+// ===== WEBHOOK =====
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
   const events = req.body.events || [];
@@ -156,132 +548,208 @@ app.post("/webhook", async (req, res) => {
     console.log("userId:", userId, "event type:", event.type);
 
     try {
-      // ---- Handle Postback (Rich Menu) ----
+      // Follow
+      if (event.type === "follow") {
+        const msg = hasStrava(userId)
+          ? `🏃 ยินดีต้อนรับกลับมานะคะ!\nเชื่อม Strava ไว้แล้ว ใช้ Rich Menu ได้เลยค่ะ 💪`
+          : `🏃 สวัสดีค่ะ! ยินดีต้อนรับสู่ อาจารย์นักวิ่ง!\n\n📌 วิธีใช้งาน:\n• ส่ง 📸 รูป screenshot ผลการวิ่งจากแอปใดก็ได้\n• ส่ง 📁 ไฟล์ .gpx จาก GPS watch\n• พิมพ์ /connect เพื่อเชื่อม Strava (ไม่บังคับ)\n\nเริ่มได้เลยค่ะ! 💪`;
+        await pushMessage(userId, msg);
+        await pushFlexMessage(userId, buildUpdateNotificationFlex());
+      }
+
+      // Postback
       if (event.type === "postback") {
         const data = event.postback.data;
 
         if (data === "action=today") {
-          await pushMessage(userId, "⏳ กำลังดึงข้อมูลจาก Strava...");
-          const activities = await getStravaActivities(userId, 1);
-          if (!activities) {
-            await pushMessage(userId, "❌ ยังไม่ได้เชื่อม Strava นะคะ\nพิมพ์ /connect เพื่อเชื่อมต่อค่ะ");
+          await pushMessage(userId, "⏳ กำลังดึงข้อมูล...");
+          const activities = await getActivitiesForUser(userId, 1);
+          const stats = calcStatsFromActivities(activities);
+          if (!stats) {
+            await pushMessage(userId, "ยังไม่มีกิจกรรมวันนี้ค่ะ 😴\n\nลองส่งรูปผลการวิ่งมาได้เลยนะคะ 📸");
           } else {
-            await pushMessage(userId, formatActivities(activities, "วันนี้"));
+            const flex = buildStatsFlexMessage(stats, "วันนี้");
+            if (flex) await pushFlexMessage(userId, flex);
           }
+
         } else if (data === "action=week") {
-          await pushMessage(userId, "⏳ กำลังดึงข้อมูลสัปดาห์นี้...");
-          const activities = await getStravaActivities(userId, 7);
-          if (!activities) {
-            await pushMessage(userId, "❌ ยังไม่ได้เชื่อม Strava นะคะ\nพิมพ์ /connect เพื่อเชื่อมต่อค่ะ");
+          await pushMessage(userId, "⏳ กำลังดึงข้อมูล...");
+          const activities = await getActivitiesForUser(userId, 7);
+          const stats = calcStatsFromActivities(activities);
+          if (!stats) {
+            await pushMessage(userId, "ยังไม่มีกิจกรรมสัปดาห์นี้ค่ะ 😴\n\nลองส่งรูปผลการวิ่งมาได้เลยนะคะ 📸");
           } else {
-            await pushMessage(userId, formatActivities(activities, "สัปดาห์นี้"));
+            const flex = buildStatsFlexMessage(stats, "สัปดาห์นี้");
+            if (flex) await pushFlexMessage(userId, flex);
           }
+
         } else if (data === "action=plan") {
           await pushMessage(userId, "⏳ กำลังสร้างตารางซ้อม...");
-          const activities = await getStravaActivities(userId, 28);
-          if (!activities) {
-            await pushMessage(userId, "❌ ยังไม่ได้เชื่อม Strava นะคะ\nพิมพ์ /connect เพื่อเชื่อมต่อค่ะ");
+          const activities = await getActivitiesForUser(userId, 28);
+          const stats = calcStatsFromActivities(activities);
+          if (!stats) {
+            await pushMessage(userId, "ยังไม่มีข้อมูลการวิ่งค่ะ 😴\n\nส่งรูปผลการวิ่งมาก่อนได้เลยนะคะ 📸");
           } else {
-            const summary = formatActivities(activities, "4 สัปดาห์ที่ผ่านมา");
-            const plan = await generateTrainingPlan(summary);
+            const summary = `วิ่ง ${stats.count} ครั้ง รวม ${stats.totalDistance.toFixed(1)}km ใน 4 สัปดาห์ที่ผ่านมา`;
+            const plan = await analyzeWithClaude(`สร้างตารางซ้อม 7 วันจากข้อมูลนี้: ${summary} ตอบภาษาไทย`);
             await pushMessage(userId, plan);
           }
+
         } else if (data === "action=recovery") {
           userSessions[userId] = { waitingFor: "recovery_image" };
           await pushMessage(userId, "📸 ส่งรูป screenshot จากแอปออกกำลังกายของคุณมาได้เลยค่ะ\nจะวิเคราะห์ Recovery และแนะนำแผนซ้อมวันนี้ให้นะคะ 💪");
+
         } else if (data === "action=goal") {
-          userSessions[userId] = { waitingFor: "goal_input" };
-          await pushMessage(userId, "🎯 พิมพ์เป้าหมายของคุณได้เลยค่ะ\nเช่น: อยากวิ่ง 100km ต่อเดือน หรือ เตรียมแข่ง Half Marathon ธันวาคมนี้");
+          if (userChallenges[userId]) {
+            const activities = await getActivitiesForUser(userId, 30);
+            const stats = calcStatsFromActivities(activities);
+            const currentKm = stats ? stats.totalDistance : 0;
+            const flex = buildChallengeFlexMessage(userId, currentKm);
+            if (flex) await pushFlexMessage(userId, flex);
+            await pushMessage(userId, "อยากตั้ง Challenge ใหม่ไหมคะ? พิมพ์ /challenge ได้เลยค่ะ");
+          } else {
+            userSessions[userId] = { waitingFor: "challenge_km" };
+            const qr = makeQuickReply([
+              { label: "50 km", text: "50" }, { label: "100 km", text: "100" },
+              { label: "150 km", text: "150" }, { label: "200 km", text: "200" },
+            ]);
+            await pushMessage(userId, "🎯 มาตั้ง Challenge กันเลยค่ะ!\n\nอยากวิ่งกี่ km ภายในเดือนนี้คะ?", qr);
+          }
+
         } else if (data === "action=chat") {
           userSessions[userId] = { waitingFor: "free_chat" };
-          await pushMessage(userId, "💬 ถามอะไรเกี่ยวกับการวิ่งได้เลยค่ะ! 🏃");
+          const qr = makeQuickReply([
+            { label: "🏃 วิธีเพิ่ม pace", text: "จะเพิ่ม pace ยังไงดีคะ" },
+            { label: "💪 ซ้อมก่อนแข่ง", text: "ควรซ้อมยังไงก่อนวันแข่ง" },
+            { label: "😴 พักฟื้นยังไง", text: "ควรพักฟื้นยังไงหลังวิ่ง" },
+          ]);
+          await pushMessage(userId, "💬 ถามอะไรเกี่ยวกับการวิ่งได้เลยค่ะ! 🏃", qr);
         }
       }
 
-      // ---- Handle Message ----
+      // Message
       if (event.type === "message") {
         const session = userSessions[userId] || {};
 
-        // ---- Follow event: แอดเพื่อนใหม่ ----
-        if (event.type === "follow" || session.waitingFor === undefined && !stravaTokens[userId]) {
-          // จะถามใน follow event ด้านล่าง
-        }
-
-        // รูปภาพ → วิเคราะห์ Recovery
+        // รูปภาพ
         if (event.message.type === "image") {
-          await pushMessage(userId, "⏳ กำลังวิเคราะห์ Recovery ของคุณ...");
           const imgRes = await axios.get(
             `https://api-data.line.me/v2/bot/message/${event.message.id}/content`,
             { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` }, responseType: "arraybuffer" }
           );
           const imageBase64 = Buffer.from(imgRes.data).toString("base64");
-          const analysis = await analyzeWithClaude(
-            `วิเคราะห์รูป Recovery จากแอปออกกำลังกายนี้ให้หน่อยค่ะ
-อ่านค่าต่างๆ เช่น Readiness score, Recovery score, HRV, Sleep score หรืออะไรก็ตามที่เห็นในรูป
-แล้วแนะนำว่าวันนี้ควรซ้อมแบบไหน หนักหรือเบา หรือควรพัก
-ตอบเป็นภาษาไทยนะคะ`,
-            imageBase64
+
+          if (session.waitingFor === "recovery_image") {
+            await pushMessage(userId, "⏳ กำลังวิเคราะห์ Recovery...");
+            const analysis = await analyzeWithClaude(
+              `วิเคราะห์รูป Recovery จากแอปออกกำลังกายนี้ให้หน่อยค่ะ อ่านค่าต่างๆ เช่น Readiness, HRV, Sleep แล้วแนะนำแผนซ้อมวันนี้ ตอบภาษาไทย (ไม่ต้อง return JSON)`,
+              imageBase64
+            );
+            await pushMessage(userId, analysis);
+            userSessions[userId] = {};
+          } else {
+            await pushMessage(userId, "⏳ กำลังอ่านผลการวิ่ง...");
+            const analysis = await analyzeWithClaude(
+              `อ่านผลการวิ่งจากรูปนี้แล้ว return JSON ในบรรทัดแรกก่อนเลยค่ะ:
+{"distance": X.XX, "pace": X.XX, "duration": X.X, "calories": XXX, "elevGain": XX, "date": "YYYY-MM-DD"}
+แล้วค่อยให้ feedback การวิ่งเป็นภาษาไทย`,
+              imageBase64
+            );
+            const activity = extractActivityFromResponse(analysis);
+            if (activity) {
+              saveActivity(userId, activity);
+              const prs = checkPR(userId, activity);
+              if (prs) await pushFlexMessage(userId, buildPRFlexMessage(prs, "การวิ่งล่าสุด"));
+              if (userChallenges[userId]) {
+                const allAct = await getActivitiesForUser(userId, 30);
+                const stats = calcStatsFromActivities(allAct);
+                if (stats) {
+                  const flex = buildChallengeFlexMessage(userId, stats.totalDistance);
+                  if (flex) await pushFlexMessage(userId, flex);
+                }
+              }
+            }
+            const feedbackText = analysis.replace(/\{[\s\S]*?\}/, "").trim();
+            await pushMessage(userId, feedbackText || analysis);
+          }
+
+        // ไฟล์
+        } else if (event.message.type === "file") {
+          const fileName = event.message.fileName || "";
+          await pushMessage(userId, `⏳ กำลังประมวลผลไฟล์ ${fileName}...`);
+          const fileRes = await axios.get(
+            `https://api-data.line.me/v2/bot/message/${event.message.id}/content`,
+            { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` }, responseType: "arraybuffer" }
           );
-          await pushMessage(userId, analysis);
-          userSessions[userId] = {};
-        }
+          if (fileName.toLowerCase().endsWith(".gpx")) {
+            const xmlText = Buffer.from(fileRes.data).toString("utf-8");
+            const gpxData = parseGPX(xmlText);
+            if (gpxData) {
+              saveActivity(userId, gpxData);
+              const prs = checkPR(userId, gpxData);
+              if (prs) await pushFlexMessage(userId, buildPRFlexMessage(prs, "การวิ่งจาก GPX"));
+              const pMin = Math.floor(gpxData.pace);
+              const pSec = Math.round((gpxData.pace - pMin) * 60);
+              await pushMessage(userId, `✅ บันทึกการวิ่งสำเร็จค่ะ!\n📏 ${gpxData.distance}km | ⏱ ${pMin}:${String(pSec).padStart(2,"0")}/km | ⏰ ${Math.floor(gpxData.duration)} นาที | ⛰ ${gpxData.elevGain}m`);
+              const analysis = await analyzeWithClaude(`วิเคราะห์การวิ่งนี้ให้หน่อยค่ะ: ${gpxData.distance}km pace ${pMin}:${String(pSec).padStart(2,"0")}/km เวลา ${Math.floor(gpxData.duration)} นาที elevation ${gpxData.elevGain}m ตอบภาษาไทย`);
+              await pushMessage(userId, analysis);
+            } else {
+              await pushMessage(userId, "❌ ไม่สามารถอ่านไฟล์ GPX ได้ค่ะ ลองส่งรูป screenshot แทนได้เลยนะคะ 📸");
+            }
+          } else {
+            await pushMessage(userId, "⚠️ รองรับเฉพาะไฟล์ .gpx ค่ะ\nหรือส่งเป็นรูป screenshot ได้เลยนะคะ 📸");
+          }
 
         // ข้อความ
-        else if (event.message.type === "text") {
+        } else if (event.message.type === "text") {
           const text = event.message.text.trim();
 
-          // รอ Client ID
-          if (session.waitingFor === "strava_client_id") {
-            userStravaConfig[userId] = { clientId: text };
-            userSessions[userId] = { waitingFor: "strava_client_secret" };
-            await pushMessage(userId, "✅ ได้รับ Client ID แล้วค่ะ\n\nตอนนี้ใส่ **Client Secret** ได้เลยค่ะ");
-          }
+          if (text === "/update") {
+            await pushFlexMessage(userId, buildUpdateNotificationFlex());
 
-          // รอ Client Secret
-          else if (session.waitingFor === "strava_client_secret") {
-            userStravaConfig[userId].clientSecret = text;
-            userSessions[userId] = {};
-            const { clientId } = userStravaConfig[userId];
-            const authUrl = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
-            await pushMessage(userId, `✅ ได้รับ Client Secret แล้วค่ะ!\n\n🔗 กดลิงก์นี้เพื่อเชื่อม Strava ได้เลยค่ะ:\n${authUrl}`);
-          }
+          } else if (text === "/connect") {
+            const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
+            await pushMessage(userId, `🔗 กดลิงก์นี้เพื่อเชื่อม Strava ได้เลยค่ะ:\n${authUrl}`);
 
-          // Command: /connect
-          else if (text === "/connect") {
-            if (!userStravaConfig[userId]?.clientId) {
-              userSessions[userId] = { waitingFor: "strava_client_id" };
-              await pushMessage(userId, `🔗 มาเชื่อม Strava กันเลยค่ะ!\n\nก่อนอื่นต้องไปสร้าง Strava API ก่อนนะคะ:\n1. ไปที่ strava.com/settings/api\n2. สร้าง Application\n3. คัดลอก Client ID มาใส่ได้เลยค่ะ\n\n📝 ใส่ Strava Client ID ของคุณได้เลยค่ะ:`);
+          } else if (text === "/disconnect") {
+            delete stravaTokens[userId];
+            await pushMessage(userId, "✅ ยกเลิกการเชื่อม Strava แล้วค่ะ\nตอนนี้ใช้การส่งรูป/ไฟล์แทนได้เลยนะคะ 📸");
+
+          } else if (text === "/history") {
+            const activities = await getActivitiesForUser(userId, 30);
+            if (!activities || activities.length === 0) {
+              await pushMessage(userId, "ยังไม่มีประวัติการวิ่งค่ะ 😴");
             } else {
-              const { clientId } = userStravaConfig[userId];
-              const authUrl = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
-              await pushMessage(userId, `🔗 คลิกลิงก์นี้เพื่อเชื่อม Strava นะคะ:\n${authUrl}`);
+              const carousel = buildCarouselMessage(activities);
+              if (carousel) await pushFlexMessage(userId, carousel);
             }
-          }
 
-          // รอ Goal input
-          else if (session.waitingFor === "goal_input") {
-            userSessions[userId] = { goal: text };
-            const activities = await getStravaActivities(userId, 28);
-            const summary = activities ? formatActivities(activities, "4 สัปดาห์ที่ผ่านมา") : "ยังไม่มีข้อมูล Strava";
-            const plan = await generateTrainingPlan(summary, { goal: text });
-            await pushMessage(userId, plan);
-            userSessions[userId] = {};
-          }
+          } else if (text === "/challenge") {
+            userSessions[userId] = { waitingFor: "challenge_km" };
+            const qr = makeQuickReply([
+              { label: "50 km", text: "50" }, { label: "100 km", text: "100" },
+              { label: "150 km", text: "150" }, { label: "200 km", text: "200" },
+            ]);
+            await pushMessage(userId, "🎯 ตั้ง Challenge ใหม่เลยค่ะ!\n\nอยากวิ่งกี่ km ภายในเดือนนี้คะ?", qr);
 
-          // Free chat
-          else {
+          } else if (session.waitingFor === "challenge_km") {
+            const km = parseFloat(text);
+            if (isNaN(km) || km <= 0) {
+              await pushMessage(userId, "❌ กรุณาใส่ตัวเลขนะคะ เช่น 100");
+            } else {
+              const now = new Date();
+              const deadline = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+              userChallenges[userId] = { goal: km, deadline, startDate: now.toISOString().split("T")[0] };
+              userSessions[userId] = {};
+              await pushMessage(userId, `✅ ตั้ง Challenge สำเร็จแล้วค่ะ!\n🎯 เป้าหมาย: วิ่ง ${km}km ภายใน ${deadline}\n\nกดปุ่ม "เป้าหมาย" เพื่อดู progress ได้เลยนะคะ 💪`);
+            }
+
+          } else {
             const response = await analyzeWithClaude(text);
             await pushMessage(userId, response);
           }
         }
       }
-
-      // ---- Follow event: แอดเพื่อนใหม่ ----
-      if (event.type === "follow") {
-        userSessions[userId] = { waitingFor: "strava_client_id" };
-        await pushMessage(userId, `🏃 สวัสดีค่ะ! ยินดีต้อนรับสู่ อาจารย์นักวิ่ง!\n\nก่อนเริ่มใช้งาน ต้องเชื่อม Strava ก่อนนะคะ\n\nไปที่ strava.com/settings/api แล้วสร้าง Application จากนั้นคัดลอก Client ID มาใส่ได้เลยค่ะ 👇`);
-      }
-
     } catch (err) {
       console.error("Event error:", err.message);
       console.error("Event error detail:", JSON.stringify(err.response?.data));
@@ -292,34 +760,65 @@ app.post("/webhook", async (req, res) => {
 // ===== STRAVA OAUTH CALLBACK =====
 app.get("/strava/callback", async (req, res) => {
   const { code, lineUserId } = req.query;
-  const stravaConfig = userStravaConfig[lineUserId];
-
-  if (!stravaConfig) {
-    res.send("<h2>❌ ไม่พบข้อมูล กรุณาเริ่มใหม่ที่ LINE ค่ะ</h2>");
+  if (!code || !lineUserId) {
+    res.send("<h2>❌ ข้อมูลไม่ครบ กรุณาลองใหม่ค่ะ</h2>");
     return;
   }
-
   try {
     const tokenRes = await axios.post("https://www.strava.com/oauth/token", {
-      client_id: stravaConfig.clientId,
-      client_secret: stravaConfig.clientSecret,
+      client_id: CONFIG.STRAVA_CLIENT_ID,
+      client_secret: CONFIG.STRAVA_CLIENT_SECRET,
       code,
       grant_type: "authorization_code",
     });
-
     stravaTokens[lineUserId] = {
       access_token: tokenRes.data.access_token,
       refresh_token: tokenRes.data.refresh_token,
       expires_at: tokenRes.data.expires_at,
     };
-
-    await pushMessage(lineUserId, `✅ เชื่อม Strava สำเร็จแล้วค่ะ!\nยินดีต้อนรับ ${tokenRes.data.athlete.firstname} 🎉\nตอนนี้ใช้ Rich Menu ด้านล่างได้เลยนะคะ 🏃`);
+    // โหลด PR จาก Strava
+    const activitiesRes = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
+      headers: { Authorization: `Bearer ${tokenRes.data.access_token}` },
+      params: { per_page: 20 },
+    });
+    if (activitiesRes.data.length > 0) {
+      convertStravaToActivities(activitiesRes.data).forEach(a => checkPR(lineUserId, a));
+    }
+    await pushMessage(lineUserId, `✅ เชื่อม Strava สำเร็จแล้วค่ะ!\nยินดีต้อนรับ ${tokenRes.data.athlete.firstname} 🎉\n\nตอนนี้ Bot จะดึงข้อมูลจาก Strava อัตโนมัติเลยค่ะ 🏃\nพิมพ์ /disconnect ถ้าอยากยกเลิกการเชื่อมต่อนะคะ`);
     res.send("<h2>✅ เชื่อม Strava สำเร็จแล้ว! กลับไปที่ LINE ได้เลยค่ะ</h2>");
   } catch (err) {
     console.error("Strava OAuth error:", err.message);
     res.send("<h2>❌ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง</h2>");
   }
 });
+
+// ===== CRON: แจ้งเตือนทุกเช้าวันจันทร์ 8.00น. =====
+setInterval(async () => {
+  const now = new Date();
+  if (now.getDay() !== 1 || now.getHours() !== 8 || now.getMinutes() !== 0) return;
+  console.log("📬 ส่งสรุปประจำสัปดาห์...");
+  const allUsers = new Set([...Object.keys(stravaTokens), ...Object.keys(userActivities)]);
+  for (const userId of allUsers) {
+    try {
+      const activities = await getActivitiesForUser(userId, 7);
+      const stats = calcStatsFromActivities(activities);
+      if (!stats) continue;
+      await pushMessage(userId, "🌅 สวัสดีตอนเช้าวันจันทร์ค่ะ! นี่คือสรุปสัปดาห์ที่แล้วค่ะ 💪");
+      const flex = buildStatsFlexMessage(stats, "สัปดาห์ที่ผ่านมา");
+      if (flex) await pushFlexMessage(userId, flex);
+      if (userChallenges[userId]) {
+        const allAct = await getActivitiesForUser(userId, 30);
+        const allStats = calcStatsFromActivities(allAct);
+        if (allStats) {
+          const challengeFlex = buildChallengeFlexMessage(userId, allStats.totalDistance);
+          if (challengeFlex) await pushFlexMessage(userId, challengeFlex);
+        }
+      }
+    } catch (e) {
+      console.error("Cron error:", e.message);
+    }
+  }
+}, 60000);
 
 // ===== START SERVER =====
 app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
