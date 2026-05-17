@@ -518,140 +518,97 @@ function buildUpdateNotificationFlex() {
 }
 
 
-// ===== EXERCISE DB API =====
-const EXERCISE_API = "https://oss.exercisedb.dev/api/v1";
-
-// กลุ่มกล้ามเนื้อตาม push/pull/legs split
-const WORKOUT_SPLITS = {
-  push: {
-    name: "Push Day 💪",
-    muscles: ["chest", "shoulders", "triceps"],
-    color: "#E74C3C",
-  },
-  pull: {
-    name: "Pull Day 🦾",
-    muscles: ["back", "biceps"],
-    color: "#2980B9",
-  },
-  legs: {
-    name: "Leg Day 🦵",
-    muscles: ["quads", "hamstrings", "glutes", "calves"],
-    color: "#27AE60",
-  },
-  upper: {
-    name: "Upper Body 🏋️",
-    muscles: ["chest", "back", "shoulders"],
-    color: "#8E44AD",
-  },
-  core: {
-    name: "Core Day 🔥",
-    muscles: ["abs"],
-    color: "#E8703A",
-  },
+// ===== EXERCISE DATABASE (built-in) =====
+const EXERCISES = {
+  chest: [
+    { name: "Barbell Bench Press", equipment: "Barbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bench_Press_-_Medium_Grip/0.jpg" },
+    { name: "Dumbbell Flyes", equipment: "Dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Flyes/0.jpg" },
+    { name: "Push-Up", equipment: "Body Weight", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pushups/0.jpg" },
+    { name: "Incline Dumbbell Press", equipment: "Dumbbell", target: "Upper Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Incline_Dumbbell_Bench_Press/0.jpg" },
+  ],
+  shoulders: [
+    { name: "Dumbbell Shoulder Press", equipment: "Dumbbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Alternate_Seated_Hammer_Curl/0.jpg" },
+    { name: "Lateral Raise", equipment: "Dumbbell", target: "Side Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Lateral_Raise/0.jpg" },
+    { name: "Front Raise", equipment: "Dumbbell", target: "Front Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Front_Raise/0.jpg" },
+  ],
+  triceps: [
+    { name: "Tricep Pushdown", equipment: "Cable", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Triceps_Pushdown/0.jpg" },
+    { name: "Skull Crusher", equipment: "Barbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Lying_Triceps_Extension_Skull_Crusher/0.jpg" },
+    { name: "Diamond Push-Up", equipment: "Body Weight", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Close-Grip_Barbell_Bench_Press/0.jpg" },
+  ],
+  back: [
+    { name: "Pull-Up", equipment: "Body Weight", target: "Lats", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pullups/0.jpg" },
+    { name: "Barbell Row", equipment: "Barbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bent_Over_Row/0.jpg" },
+    { name: "Lat Pulldown", equipment: "Cable", target: "Lats", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Wide-Grip_Lat_Pulldown/0.jpg" },
+    { name: "Seated Cable Row", equipment: "Cable", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg" },
+  ],
+  biceps: [
+    { name: "Barbell Curl", equipment: "Barbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Curl/0.jpg" },
+    { name: "Dumbbell Hammer Curl", equipment: "Dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Alternate_Hammer_Curl/0.jpg" },
+    { name: "Concentration Curl", equipment: "Dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Concentration_Curls/0.jpg" },
+  ],
+  quads: [
+    { name: "Barbell Squat", equipment: "Barbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Full_Squat/0.jpg" },
+    { name: "Leg Press", equipment: "Machine", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg" },
+    { name: "Leg Extension", equipment: "Machine", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Extensions/0.jpg" },
+  ],
+  hamstrings: [
+    { name: "Romanian Deadlift", equipment: "Barbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Romanian_Deadlift/0.jpg" },
+    { name: "Leg Curl", equipment: "Machine", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Lying_Leg_Curls/0.jpg" },
+  ],
+  glutes: [
+    { name: "Hip Thrust", equipment: "Barbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Hip_Thrust/0.jpg" },
+    { name: "Bulgarian Split Squat", equipment: "Dumbbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Bulgarian_Split_Squat/0.jpg" },
+  ],
+  calves: [
+    { name: "Standing Calf Raise", equipment: "Machine", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Calf_Raises/0.jpg" },
+    { name: "Seated Calf Raise", equipment: "Machine", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Calf_Raise/0.jpg" },
+  ],
+  abs: [
+    { name: "Plank", equipment: "Body Weight", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Plank/0.jpg" },
+    { name: "Crunch", equipment: "Body Weight", target: "Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Crunches/0.jpg" },
+    { name: "Leg Raise", equipment: "Body Weight", target: "Lower Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Flat_Bench_Leg_Pull-In/0.jpg" },
+    { name: "Russian Twist", equipment: "Body Weight", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Russian_Twist/0.jpg" },
+  ],
 };
 
-// sets/reps ตามประเภทการออกกำลังกาย
+const WORKOUT_SPLITS = {
+  push: { name: "Push Day 💪", muscles: ["chest", "shoulders", "triceps"], color: "#E74C3C" },
+  pull: { name: "Pull Day 🦾", muscles: ["back", "biceps"], color: "#2980B9" },
+  legs: { name: "Leg Day 🦵", muscles: ["quads", "hamstrings", "glutes", "calves"], color: "#27AE60" },
+  upper: { name: "Upper Body 🏋️", muscles: ["chest", "back", "shoulders"], color: "#8E44AD" },
+  core: { name: "Core Day 🔥", muscles: ["abs"], color: "#E8703A" },
+};
+
 const EXERCISE_PRESCRIPTION = {
   strength: { sets: 4, reps: "6-8", rest: "2-3 นาที" },
-  hypertrophy: { sets: 4, reps: "10-12", rest: "60-90 วินาที" },
-  endurance: { sets: 3, reps: "15-20", rest: "30-45 วินาที" },
+  hypertrophy: { sets: 4, reps: "10-12", rest: "60-90 วิ" },
+  endurance: { sets: 3, reps: "15-20", rest: "30-45 วิ" },
 };
 
-async function fetchExercisesByMuscle(muscle, limit = 3) {
-  try {
-    const res = await axios.get(`${EXERCISE_API}/exercises/target/${muscle}`, {
-      params: { limit, offset: Math.floor(Math.random() * 10) },
-      timeout: 5000,
-    });
-    return res.data.data || res.data || [];
-  } catch (e) {
-    console.error("ExerciseDB error:", e.message);
-    return [];
-  }
-}
-
-async function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrophy") {
+function getExercisesForSplit(splitType) {
   const split = WORKOUT_SPLITS[splitType] || WORKOUT_SPLITS.push;
-  const prescription = EXERCISE_PRESCRIPTION[goal] || EXERCISE_PRESCRIPTION.hypertrophy;
-
-  // ดึงท่าจากแต่ละกลุ่มกล้ามเนื้อ
   let exercises = [];
   for (const muscle of split.muscles) {
-    const fetched = await fetchExercisesByMuscle(muscle, 2);
-    exercises = exercises.concat(fetched.slice(0, 2));
+    const list = EXERCISES[muscle] || [];
+    // สุ่มท่าจากแต่ละกลุ่ม
+    const shuffled = list.sort(() => Math.random() - 0.5);
+    exercises = exercises.concat(shuffled.slice(0, 2));
     if (exercises.length >= 6) break;
   }
+  return exercises.slice(0, 6);
+}
+
+function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrophy") {
+  const split = WORKOUT_SPLITS[splitType] || WORKOUT_SPLITS.push;
+  const prescription = EXERCISE_PRESCRIPTION[goal] || EXERCISE_PRESCRIPTION.hypertrophy;
+  const exercises = getExercisesForSplit(splitType);
 
   if (exercises.length === 0) return null;
 
-  // สร้าง bubble สำหรับแต่ละท่า
-  const bubbles = exercises.slice(0, 6).map((ex, i) => {
-    const name = ex.name || "Exercise";
-    const target = ex.target || ex.targetMuscles?.[0] || "-";
-    const equipment = ex.equipment || "-";
-    const gifUrl = ex.gifUrl || ex.images?.[0] || null;
-    const bodyPart = ex.bodyPart || "-";
-
-    return {
-      type: "bubble",
-      size: "kilo",
-      hero: gifUrl ? {
-        type: "image",
-        url: gifUrl,
-        size: "full",
-        aspectRatio: "1:1",
-        aspectMode: "cover",
-      } : undefined,
-      header: {
-        type: "box", layout: "vertical", backgroundColor: split.color, paddingAll: "10px",
-        contents: [
-          { type: "text", text: `${i + 1}. ${name}`, color: "#ffffff", size: "sm", weight: "bold", wrap: true },
-        ],
-      },
-      body: {
-        type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm",
-        contents: [
-          {
-            type: "box", layout: "horizontal",
-            contents: [
-              { type: "text", text: "💪 กล้ามเนื้อ", size: "xs", color: "#888888", flex: 2 },
-              { type: "text", text: target, size: "xs", color: "#333333", flex: 3, wrap: true },
-            ],
-          },
-          {
-            type: "box", layout: "horizontal",
-            contents: [
-              { type: "text", text: "🏋️ อุปกรณ์", size: "xs", color: "#888888", flex: 2 },
-              { type: "text", text: equipment, size: "xs", color: "#333333", flex: 3, wrap: true },
-            ],
-          },
-          { type: "separator" },
-          {
-            type: "box", layout: "horizontal", paddingTop: "4px",
-            contents: [
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: `${prescription.sets}`, size: "lg", weight: "bold", color: split.color, align: "center" },
-                { type: "text", text: "sets", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: prescription.reps, size: "lg", weight: "bold", color: split.color, align: "center" },
-                { type: "text", text: "reps", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: prescription.rest.split(" ")[0], size: "sm", weight: "bold", color: split.color, align: "center" },
-                { type: "text", text: "พัก", size: "xs", color: "#888888", align: "center" },
-              ]},
-            ],
-          },
-        ],
-      },
-    };
-  });
-
-  // header card บอก workout วันนี้
+  // Header bubble
   const headerBubble = {
-    type: "bubble",
-    size: "kilo",
+    type: "bubble", size: "kilo",
     header: {
       type: "box", layout: "vertical", backgroundColor: split.color, paddingAll: "16px",
       contents: [
@@ -676,6 +633,50 @@ async function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrop
       ],
     },
   };
+
+  // Exercise bubbles
+  const bubbles = exercises.map((ex, i) => ({
+    type: "bubble", size: "kilo",
+    hero: {
+      type: "image",
+      url: ex.gifUrl,
+      size: "full",
+      aspectRatio: "4:3",
+      aspectMode: "cover",
+    },
+    body: {
+      type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm",
+      contents: [
+        { type: "text", text: `${i + 1}. ${ex.name}`, size: "sm", weight: "bold", color: split.color, wrap: true },
+        {
+          type: "box", layout: "horizontal",
+          contents: [
+            { type: "text", text: "💪", size: "xs", flex: 0 },
+            { type: "text", text: ex.target, size: "xs", color: "#555555", margin: "sm" },
+            { type: "text", text: `🏋️ ${ex.equipment}`, size: "xs", color: "#555555", align: "end" },
+          ],
+        },
+        { type: "separator" },
+        {
+          type: "box", layout: "horizontal", paddingTop: "8px",
+          contents: [
+            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+              { type: "text", text: `${prescription.sets}`, size: "xl", weight: "bold", color: split.color, align: "center" },
+              { type: "text", text: "sets", size: "xs", color: "#888888", align: "center" },
+            ]},
+            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+              { type: "text", text: prescription.reps, size: "md", weight: "bold", color: split.color, align: "center" },
+              { type: "text", text: "reps", size: "xs", color: "#888888", align: "center" },
+            ]},
+            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+              { type: "text", text: prescription.rest, size: "xs", weight: "bold", color: split.color, align: "center", wrap: true },
+              { type: "text", text: "พัก", size: "xs", color: "#888888", align: "center" },
+            ]},
+          ],
+        },
+      ],
+    },
+  }));
 
   return {
     type: "flex",
@@ -758,16 +759,8 @@ app.post("/webhook", async (req, res) => {
             await pushMessage(userId, "ยังไม่มีข้อมูลการวิ่งค่ะ 😴\n\nส่งรูปผลการวิ่งมาก่อนได้เลยนะคะ 📸");
           } else {
             const summary = `วิ่ง ${stats.count} ครั้ง รวม ${stats.totalDistance.toFixed(1)}km ใน 4 สัปดาห์ที่ผ่านมา`;
-            const plan = await analyzeWithClaude(`สร้างตารางซ้อม 7 วันจากข้อมูลนี้: ${summary} ตอบภาษาไทย โดยรวม weight training วันที่เหมาะสมด้วย ระบุว่าแต่ละวัน weight training ประเภทไหน (push/pull/legs/upper/core)`);
+            const plan = await analyzeWithClaude(`สร้างตารางซ้อม 7 วันจากข้อมูลนี้: ${summary} ตอบภาษาไทย`);
             await pushMessage(userId, plan);
-            // Quick reply สำหรับดู weight training
-            const qr = makeQuickReply([
-              { label: "🏋️ Push Day", text: "/weight push" },
-              { label: "🦾 Pull Day", text: "/weight pull" },
-              { label: "🦵 Leg Day", text: "/weight legs" },
-              { label: "💪 Upper Body", text: "/weight upper" },
-            ]);
-            await pushMessage(userId, "📋 กดเพื่อดูท่า Weight Training วันนี้ได้เลยค่ะ 👇", qr);
           }
 
         } else if (data === "action=recovery") {
@@ -881,19 +874,6 @@ app.post("/webhook", async (req, res) => {
 
           if (text === "/update") {
             await pushFlexMessage(userId, buildUpdateNotificationFlex());
-
-          } else if (text === "/weight" || text.startsWith("/weight ")) {
-            // /weight push|pull|legs|upper|core [strength|hypertrophy|endurance]
-            const parts = text.split(" ");
-            const splitType = parts[1] || "push";
-            const goal = parts[2] || "hypertrophy";
-            await pushMessage(userId, `⏳ กำลังสร้างโปรแกรม ${splitType.toUpperCase()} วันนี้...`);
-            const carousel = await buildWeightTrainingCarousel(splitType, goal);
-            if (carousel) {
-              await pushFlexMessage(userId, carousel);
-            } else {
-              await pushMessage(userId, "❌ ไม่สามารถดึงข้อมูลท่าออกกำลังกายได้ค่ะ ลองใหม่อีกครั้งนะคะ");
-            }
 
           } else if (text === "/connect") {
             const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
