@@ -876,9 +876,7 @@ app.post("/webhook", async (req, res) => {
             { label: "🔥 Core", text: "weight_core" },
             { label: "🦵 Lower Body", text: "weight_lower" },
           ]);
-          await pushMessage(userId, "🏋️ Weight Training วันนี้!
-
-Step 1: อยากเล่นส่วนไหนคะ?", qrBodyPart);
+          await pushMessage(userId, "🏋️ Weight Training วันนี้!\n\nStep 1: อยากเล่นส่วนไหนคะ?", qrBodyPart);
 
         } else if (data === "action=goal") {
           if (userChallenges[userId]) {
