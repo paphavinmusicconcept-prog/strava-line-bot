@@ -685,6 +685,111 @@ function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrophy") {
   };
 }
 
+
+// ===== BUILD WEIGHT TRAINING BY EQUIPMENT =====
+function buildWeightTrainingByEquipment(muscles, equipment) {
+  const equipmentMap = {
+    "body only": "Body Weight",
+    "dumbbell": "Dumbbell",
+    "barbell": "Barbell",
+  };
+  const equipLabel = equipmentMap[equipment] || equipment;
+
+  // กรองท่าตามกลุ่มกล้ามเนื้อและอุปกรณ์
+  let exercises = [];
+  for (const muscle of muscles) {
+    const list = EXERCISES[muscle] || [];
+    const filtered = list.filter(ex => 
+      ex.equipment.toLowerCase().includes(equipment.toLowerCase()) ||
+      (equipment === "body only" && ex.equipment.toLowerCase().includes("body"))
+    );
+    // ถ้าไม่มีท่าตรงกับ equipment ใช้ทุกท่าแทน
+    const source = filtered.length > 0 ? filtered : list;
+    const shuffled = source.sort(() => Math.random() - 0.5);
+    exercises = exercises.concat(shuffled.slice(0, 2));
+    if (exercises.length >= 6) break;
+  }
+
+  // ถ้าไม่มีท่าเลย
+  if (exercises.length === 0) return null;
+  exercises = exercises.slice(0, 6);
+
+  const splitColor = equipment === "body only" ? "#27AE60" : equipment === "dumbbell" ? "#2980B9" : "#E74C3C";
+  const prescription = { sets: 4, reps: "10-12", rest: "60-90 วิ" };
+
+  // Header bubble
+  const headerBubble = {
+    type: "bubble", size: "kilo",
+    header: {
+      type: "box", layout: "vertical", backgroundColor: splitColor, paddingAll: "16px",
+      contents: [
+        { type: "text", text: "🏋️ Weight Training", color: "#ffffff", size: "xs" },
+        { type: "text", text: equipLabel, color: "#ffffff", size: "lg", weight: "bold" },
+        { type: "text", text: `${exercises.length} ท่า | ${prescription.sets} sets × ${prescription.reps} reps`, color: "#ffffff99", size: "xs" },
+      ],
+    },
+    body: {
+      type: "box", layout: "vertical", paddingAll: "16px", spacing: "sm",
+      contents: [
+        { type: "text", text: "อุปกรณ์:", size: "sm", color: "#555555", weight: "bold" },
+        { type: "text", text: `🏋️ ${equipLabel}`, size: "md", color: splitColor, weight: "bold" },
+        { type: "separator", margin: "md" },
+        { type: "text", text: "👉 เลื่อนดูท่าออกกำลังกายได้เลยค่ะ →", size: "xs", color: "#888888", wrap: true, margin: "md" },
+      ],
+    },
+  };
+
+  // Exercise bubbles
+  const bubbles = exercises.map((ex, i) => ({
+    type: "bubble", size: "kilo",
+    hero: {
+      type: "image",
+      url: ex.gifUrl,
+      size: "full",
+      aspectRatio: "4:3",
+      aspectMode: "cover",
+    },
+    body: {
+      type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm",
+      contents: [
+        { type: "text", text: `${i + 1}. ${ex.name}`, size: "sm", weight: "bold", color: splitColor, wrap: true },
+        {
+          type: "box", layout: "horizontal",
+          contents: [
+            { type: "text", text: "💪", size: "xs", flex: 0 },
+            { type: "text", text: ex.target, size: "xs", color: "#555555", margin: "sm", flex: 1 },
+            { type: "text", text: `🏋️ ${ex.equipment}`, size: "xs", color: "#555555", align: "end" },
+          ],
+        },
+        { type: "separator" },
+        {
+          type: "box", layout: "horizontal", paddingTop: "8px",
+          contents: [
+            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+              { type: "text", text: `${prescription.sets}`, size: "xl", weight: "bold", color: splitColor, align: "center" },
+              { type: "text", text: "sets", size: "xs", color: "#888888", align: "center" },
+            ]},
+            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+              { type: "text", text: prescription.reps, size: "md", weight: "bold", color: splitColor, align: "center" },
+              { type: "text", text: "reps", size: "xs", color: "#888888", align: "center" },
+            ]},
+            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+              { type: "text", text: prescription.rest, size: "xs", weight: "bold", color: splitColor, align: "center", wrap: true },
+              { type: "text", text: "พัก", size: "xs", color: "#888888", align: "center" },
+            ]},
+          ],
+        },
+      ],
+    },
+  }));
+
+  return {
+    type: "flex",
+    altText: `🏋️ ${equipLabel} - ${exercises.length} ท่าวันนี้`,
+    contents: { type: "carousel", contents: [headerBubble, ...bubbles] },
+  };
+}
+
 // ===== LINE MESSAGING =====
 function makeQuickReply(items) {
   return { items: items.map(i => ({ type: "action", action: { type: "message", label: i.label, text: i.text } })) };
@@ -764,8 +869,16 @@ app.post("/webhook", async (req, res) => {
           }
 
         } else if (data === "action=recovery") {
-          userSessions[userId] = { waitingFor: "recovery_image" };
-          await pushMessage(userId, "📸 ส่งรูป screenshot จากแอปออกกำลังกายของคุณมาได้เลยค่ะ\nจะวิเคราะห์ Recovery และแนะนำแผนซ้อมวันนี้ให้นะคะ 💪");
+          // Weight Training flow - Step 1: เลือกส่วนร่างกาย
+          userSessions[userId] = { waitingFor: "weight_body_part" };
+          const qrBodyPart = makeQuickReply([
+            { label: "💪 Upper Body", text: "weight_upper" },
+            { label: "🔥 Core", text: "weight_core" },
+            { label: "🦵 Lower Body", text: "weight_lower" },
+          ]);
+          await pushMessage(userId, "🏋️ Weight Training วันนี้!
+
+Step 1: อยากเล่นส่วนไหนคะ?", qrBodyPart);
 
         } else if (data === "action=goal") {
           if (userChallenges[userId]) {
@@ -874,6 +987,42 @@ app.post("/webhook", async (req, res) => {
 
           if (text === "/update") {
             await pushFlexMessage(userId, buildUpdateNotificationFlex());
+
+          } else if (text.startsWith("weight_") && session.waitingFor === "weight_body_part") {
+            // Step 2: เลือกอุปกรณ์
+            const bodyPartMap = {
+              weight_upper: { label: "Upper Body 💪", muscles: ["chest", "shoulders", "triceps", "back", "biceps"] },
+              weight_core: { label: "Core 🔥", muscles: ["abs"] },
+              weight_lower: { label: "Lower Body 🦵", muscles: ["quads", "hamstrings", "glutes", "calves"] },
+            };
+            const bodyPart = bodyPartMap[text] || bodyPartMap.weight_upper;
+            userSessions[userId] = { waitingFor: "weight_equipment", bodyPart };
+            const qrEquipment = makeQuickReply([
+              { label: "🤸 Body Weight", text: "equip_bodyweight" },
+              { label: "🏋️ Dumbbell", text: "equip_dumbbell" },
+              { label: "🔩 Barbell", text: "equip_barbell" },
+            ]);
+            await pushMessage(userId, `✅ ${bodyPart.label}
+
+Step 2: ใช้อุปกรณ์อะไรคะ?`, qrEquipment);
+
+          } else if (text.startsWith("equip_") && session.waitingFor === "weight_equipment") {
+            // Step 3: แสดง Carousel GIF
+            const equipMap = {
+              equip_bodyweight: "body only",
+              equip_dumbbell: "dumbbell",
+              equip_barbell: "barbell",
+            };
+            const equipment = equipMap[text] || "dumbbell";
+            const bodyPart = session.bodyPart || { label: "Upper Body", muscles: ["chest", "shoulders"] };
+            userSessions[userId] = {};
+            await pushMessage(userId, `⏳ กำลังสร้างโปรแกรม ${bodyPart.label}...`);
+            const carousel = buildWeightTrainingByEquipment(bodyPart.muscles, equipment);
+            if (carousel) {
+              await pushFlexMessage(userId, carousel);
+            } else {
+              await pushMessage(userId, "❌ ไม่มีท่าที่ตรงกับอุปกรณ์นี้ค่ะ ลองเลือกใหม่ได้เลยนะคะ");
+            }
 
           } else if (text === "/weight" || text.startsWith("/weight ")) {
             const parts = text.trim().split(" ");
