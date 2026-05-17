@@ -875,6 +875,30 @@ app.post("/webhook", async (req, res) => {
           if (text === "/update") {
             await pushFlexMessage(userId, buildUpdateNotificationFlex());
 
+          } else if (text === "/weight" || text.startsWith("/weight ")) {
+            const parts = text.trim().split(" ");
+            const splitType = parts[1] || "push";
+            const goal = parts[2] || "hypertrophy";
+            const validSplits = ["push", "pull", "legs", "upper", "core"];
+            if (!validSplits.includes(splitType)) {
+              const qr = makeQuickReply([
+                { label: "💪 Push Day", text: "/weight push" },
+                { label: "🦾 Pull Day", text: "/weight pull" },
+                { label: "🦵 Leg Day", text: "/weight legs" },
+                { label: "🏋️ Upper Body", text: "/weight upper" },
+                { label: "🔥 Core Day", text: "/weight core" },
+              ]);
+              await pushMessage(userId, "เลือก Weight Training วันนี้ได้เลยค่ะ 👇", qr);
+            } else {
+              await pushMessage(userId, `⏳ กำลังสร้างโปรแกรม ${splitType.toUpperCase()} วันนี้...`);
+              const carousel = buildWeightTrainingCarousel(splitType, goal);
+              if (carousel) {
+                await pushFlexMessage(userId, carousel);
+              } else {
+                await pushMessage(userId, "❌ ไม่สามารถสร้างโปรแกรมได้ค่ะ ลองใหม่อีกครั้งนะคะ");
+              }
+            }
+
           } else if (text === "/connect") {
             const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
             await pushMessage(userId, `🔗 กดลิงก์นี้เพื่อเชื่อม Strava ได้เลยค่ะ:\n${authUrl}`);
