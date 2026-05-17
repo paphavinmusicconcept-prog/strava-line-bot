@@ -520,55 +520,85 @@ function buildUpdateNotificationFlex() {
 
 // ===== EXERCISE DATABASE (built-in) =====
 const EXERCISES = {
+  // ===== CHEST =====
   chest: [
-    { name: "Barbell Bench Press", equipment: "Barbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bench_Press_-_Medium_Grip/0.jpg" },
-    { name: "Dumbbell Flyes", equipment: "Dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Flyes/0.jpg" },
-    { name: "Push-Up", equipment: "Body Weight", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pushups/0.jpg" },
-    { name: "Incline Dumbbell Press", equipment: "Dumbbell", target: "Upper Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Incline_Dumbbell_Bench_Press/0.jpg" },
+    { name: "Barbell Bench Press", equipment: "barbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bench_Press_-_Medium_Grip/0.jpg" },
+    { name: "Dumbbell Bench Press", equipment: "dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Bench_Press/0.jpg" },
+    { name: "Dumbbell Flyes", equipment: "dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Flyes/0.jpg" },
+    { name: "Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pushups/0.jpg" },
+    { name: "Wide Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Wide-Grip_Barbell_Bench_Press/0.jpg" },
+    { name: "Incline Dumbbell Press", equipment: "dumbbell", target: "Upper Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Incline_Dumbbell_Bench_Press/0.jpg" },
   ],
+  // ===== SHOULDERS =====
   shoulders: [
-    { name: "Dumbbell Shoulder Press", equipment: "Dumbbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Alternate_Seated_Hammer_Curl/0.jpg" },
-    { name: "Lateral Raise", equipment: "Dumbbell", target: "Side Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Lateral_Raise/0.jpg" },
-    { name: "Front Raise", equipment: "Dumbbell", target: "Front Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Front_Raise/0.jpg" },
+    { name: "Dumbbell Shoulder Press", equipment: "dumbbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Shoulder_Press/0.jpg" },
+    { name: "Barbell Overhead Press", equipment: "barbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Shoulder_Press/0.jpg" },
+    { name: "Dumbbell Lateral Raise", equipment: "dumbbell", target: "Side Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Lateral_Raise/0.jpg" },
+    { name: "Dumbbell Front Raise", equipment: "dumbbell", target: "Front Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Front_Raise/0.jpg" },
+    { name: "Pike Push-Up", equipment: "body only", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pike_Push-up/0.jpg" },
   ],
+  // ===== TRICEPS =====
   triceps: [
-    { name: "Tricep Pushdown", equipment: "Cable", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Triceps_Pushdown/0.jpg" },
-    { name: "Skull Crusher", equipment: "Barbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Lying_Triceps_Extension_Skull_Crusher/0.jpg" },
-    { name: "Diamond Push-Up", equipment: "Body Weight", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Close-Grip_Barbell_Bench_Press/0.jpg" },
+    { name: "Barbell Skull Crusher", equipment: "barbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Lying_Triceps_Extension_Skull_Crusher/0.jpg" },
+    { name: "Dumbbell Tricep Kickback", equipment: "dumbbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Kickback/0.jpg" },
+    { name: "Diamond Push-Up", equipment: "body only", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Diamond_Push-up/0.jpg" },
+    { name: "Tricep Dips", equipment: "body only", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Tricep_Dips/0.jpg" },
+    { name: "Dumbbell Overhead Tricep Extension", equipment: "dumbbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_One_Arm_Triceps_Extension/0.jpg" },
   ],
+  // ===== BACK =====
   back: [
-    { name: "Pull-Up", equipment: "Body Weight", target: "Lats", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pullups/0.jpg" },
-    { name: "Barbell Row", equipment: "Barbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bent_Over_Row/0.jpg" },
-    { name: "Lat Pulldown", equipment: "Cable", target: "Lats", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Wide-Grip_Lat_Pulldown/0.jpg" },
-    { name: "Seated Cable Row", equipment: "Cable", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg" },
+    { name: "Pull-Up", equipment: "body only", target: "Lats", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pullups/0.jpg" },
+    { name: "Chin-Up", equipment: "body only", target: "Lats & Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Chin-up/0.jpg" },
+    { name: "Barbell Bent Over Row", equipment: "barbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bent_Over_Row/0.jpg" },
+    { name: "Dumbbell One Arm Row", equipment: "dumbbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_One-Arm_Row/0.jpg" },
+    { name: "Superman", equipment: "body only", target: "Lower Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Superman/0.jpg" },
   ],
+  // ===== BICEPS =====
   biceps: [
-    { name: "Barbell Curl", equipment: "Barbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Curl/0.jpg" },
-    { name: "Dumbbell Hammer Curl", equipment: "Dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Alternate_Hammer_Curl/0.jpg" },
-    { name: "Concentration Curl", equipment: "Dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Concentration_Curls/0.jpg" },
+    { name: "Barbell Curl", equipment: "barbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Curl/0.jpg" },
+    { name: "Dumbbell Alternate Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Alternate_Bicep_Curl/0.jpg" },
+    { name: "Dumbbell Hammer Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Alternate_Hammer_Curl/0.jpg" },
+    { name: "Inverted Row", equipment: "body only", target: "Biceps & Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Inverted_Row_with_Straps/0.jpg" },
   ],
+  // ===== QUADS =====
   quads: [
-    { name: "Barbell Squat", equipment: "Barbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Full_Squat/0.jpg" },
-    { name: "Leg Press", equipment: "Machine", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg" },
-    { name: "Leg Extension", equipment: "Machine", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Extensions/0.jpg" },
+    { name: "Barbell Squat", equipment: "barbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Full_Squat/0.jpg" },
+    { name: "Dumbbell Goblet Squat", equipment: "dumbbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Goblet_Squat/0.jpg" },
+    { name: "Bodyweight Squat", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Bodyweight_Squat/0.jpg" },
+    { name: "Jump Squat", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Squat_Jumps/0.jpg" },
+    { name: "Dumbbell Lunge", equipment: "dumbbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Lunge/0.jpg" },
+    { name: "Walking Lunge", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Bodyweight_Walking_Lunge/0.jpg" },
   ],
+  // ===== HAMSTRINGS =====
   hamstrings: [
-    { name: "Romanian Deadlift", equipment: "Barbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Romanian_Deadlift/0.jpg" },
-    { name: "Leg Curl", equipment: "Machine", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Lying_Leg_Curls/0.jpg" },
+    { name: "Barbell Romanian Deadlift", equipment: "barbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Romanian_Deadlift/0.jpg" },
+    { name: "Dumbbell Romanian Deadlift", equipment: "dumbbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Romanian_Deadlift/0.jpg" },
+    { name: "Nordic Hamstring Curl", equipment: "body only", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Natural_Glute_Ham_Raise/0.jpg" },
+    { name: "Glute Bridge", equipment: "body only", target: "Hamstrings & Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Glute_Bridge/0.jpg" },
   ],
+  // ===== GLUTES =====
   glutes: [
-    { name: "Hip Thrust", equipment: "Barbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Hip_Thrust/0.jpg" },
-    { name: "Bulgarian Split Squat", equipment: "Dumbbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Bulgarian_Split_Squat/0.jpg" },
+    { name: "Barbell Hip Thrust", equipment: "barbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Hip_Thrust/0.jpg" },
+    { name: "Dumbbell Bulgarian Split Squat", equipment: "dumbbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Bulgarian_Split_Squat/0.jpg" },
+    { name: "Donkey Kick", equipment: "body only", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Donkey_Kicks/0.jpg" },
+    { name: "Single Leg Glute Bridge", equipment: "body only", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Glute_Bridge/0.jpg" },
   ],
+  // ===== CALVES =====
   calves: [
-    { name: "Standing Calf Raise", equipment: "Machine", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Calf_Raises/0.jpg" },
-    { name: "Seated Calf Raise", equipment: "Machine", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Calf_Raise/0.jpg" },
+    { name: "Standing Calf Raise", equipment: "body only", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Standing_Calf_Raises/0.jpg" },
+    { name: "Dumbbell Calf Raise", equipment: "dumbbell", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Calf_Raise/0.jpg" },
+    { name: "Jump Rope", equipment: "body only", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Jump_Rope/0.jpg" },
   ],
+  // ===== ABS / CORE =====
   abs: [
-    { name: "Plank", equipment: "Body Weight", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Plank/0.jpg" },
-    { name: "Crunch", equipment: "Body Weight", target: "Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Crunches/0.jpg" },
-    { name: "Leg Raise", equipment: "Body Weight", target: "Lower Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Flat_Bench_Leg_Pull-In/0.jpg" },
-    { name: "Russian Twist", equipment: "Body Weight", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Russian_Twist/0.jpg" },
+    { name: "Plank", equipment: "body only", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Plank/0.jpg" },
+    { name: "Crunches", equipment: "body only", target: "Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Crunches/0.jpg" },
+    { name: "Leg Raise", equipment: "body only", target: "Lower Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Flat_Bench_Leg_Pull-In/0.jpg" },
+    { name: "Russian Twist", equipment: "body only", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Russian_Twist/0.jpg" },
+    { name: "Mountain Climber", equipment: "body only", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Mountain_Climbers/0.jpg" },
+    { name: "Bicycle Crunch", equipment: "body only", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Air_Bike/0.jpg" },
+    { name: "Dumbbell Side Bend", equipment: "dumbbell", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Side_Bend/0.jpg" },
+    { name: "Barbell Rollout", equipment: "barbell", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Ab_Rollout/0.jpg" },
   ],
 };
 
@@ -689,30 +719,26 @@ function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrophy") {
 // ===== BUILD WEIGHT TRAINING BY EQUIPMENT =====
 function buildWeightTrainingByEquipment(muscles, equipment) {
   const equipmentMap = {
-    "body only": "Body Weight",
-    "dumbbell": "Dumbbell",
-    "barbell": "Barbell",
+    "body only": "Body Weight 🤸",
+    "dumbbell": "Dumbbell 🏋️",
+    "barbell": "Barbell 🔩",
   };
   const equipLabel = equipmentMap[equipment] || equipment;
 
-  // กรองท่าตามกลุ่มกล้ามเนื้อและอุปกรณ์
+  // กรองท่าตามกลุ่มกล้ามเนื้อและอุปกรณ์ (strict filter)
   let exercises = [];
   for (const muscle of muscles) {
     const list = EXERCISES[muscle] || [];
-    const filtered = list.filter(ex => 
-      ex.equipment.toLowerCase().includes(equipment.toLowerCase()) ||
-      (equipment === "body only" && ex.equipment.toLowerCase().includes("body"))
-    );
-    // ถ้าไม่มีท่าตรงกับ equipment ใช้ทุกท่าแทน
-    const source = filtered.length > 0 ? filtered : list;
-    const shuffled = source.sort(() => Math.random() - 0.5);
+    const filtered = list.filter(ex => ex.equipment === equipment);
+    if (filtered.length === 0) continue;
+    const shuffled = [...filtered].sort(() => Math.random() - 0.5);
     exercises = exercises.concat(shuffled.slice(0, 2));
-    if (exercises.length >= 6) break;
+    if (exercises.length >= 5) break;
   }
 
   // ถ้าไม่มีท่าเลย
   if (exercises.length === 0) return null;
-  exercises = exercises.slice(0, 6);
+  exercises = exercises.slice(0, 5);
 
   const splitColor = equipment === "body only" ? "#27AE60" : equipment === "dumbbell" ? "#2980B9" : "#E74C3C";
   const prescription = { sets: 4, reps: "10-12", rest: "60-90 วิ" };
@@ -740,48 +766,69 @@ function buildWeightTrainingByEquipment(muscles, equipment) {
   };
 
   // Exercise bubbles
-  const bubbles = exercises.map((ex, i) => ({
-    type: "bubble", size: "kilo",
-    hero: {
-      type: "image",
-      url: ex.gifUrl,
-      size: "full",
-      aspectRatio: "4:3",
-      aspectMode: "cover",
-    },
-    body: {
-      type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm",
-      contents: [
-        { type: "text", text: `${i + 1}. ${ex.name}`, size: "sm", weight: "bold", color: splitColor, wrap: true },
-        {
-          type: "box", layout: "horizontal",
-          contents: [
-            { type: "text", text: "💪", size: "xs", flex: 0 },
-            { type: "text", text: ex.target, size: "xs", color: "#555555", margin: "sm", flex: 1 },
-            { type: "text", text: `🏋️ ${ex.equipment}`, size: "xs", color: "#555555", align: "end" },
-          ],
-        },
-        { type: "separator" },
-        {
-          type: "box", layout: "horizontal", paddingTop: "8px",
-          contents: [
-            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-              { type: "text", text: `${prescription.sets}`, size: "xl", weight: "bold", color: splitColor, align: "center" },
-              { type: "text", text: "sets", size: "xs", color: "#888888", align: "center" },
-            ]},
-            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-              { type: "text", text: prescription.reps, size: "md", weight: "bold", color: splitColor, align: "center" },
-              { type: "text", text: "reps", size: "xs", color: "#888888", align: "center" },
-            ]},
-            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-              { type: "text", text: prescription.rest, size: "xs", weight: "bold", color: splitColor, align: "center", wrap: true },
-              { type: "text", text: "พัก", size: "xs", color: "#888888", align: "center" },
-            ]},
-          ],
-        },
-      ],
-    },
-  }));
+  const bubbles = exercises.map((ex, i) => {
+    const hasImage = !!ex.gifUrl;
+    const bodyContents = [
+      { type: "text", text: `${i + 1}. ${ex.name}`, size: "sm", weight: "bold", color: splitColor, wrap: true },
+      {
+        type: "box", layout: "horizontal",
+        contents: [
+          { type: "text", text: "💪", size: "xs", flex: 0 },
+          { type: "text", text: ex.target, size: "xs", color: "#555555", margin: "sm", flex: 1 },
+          { type: "text", text: `🏋️ ${ex.equipment}`, size: "xs", color: "#555555", align: "end" },
+        ],
+      },
+      { type: "separator" },
+      {
+        type: "box", layout: "horizontal", paddingTop: "8px",
+        contents: [
+          { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+            { type: "text", text: `${prescription.sets}`, size: "xl", weight: "bold", color: splitColor, align: "center" },
+            { type: "text", text: "sets", size: "xs", color: "#888888", align: "center" },
+          ]},
+          { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+            { type: "text", text: prescription.reps, size: "md", weight: "bold", color: splitColor, align: "center" },
+            { type: "text", text: "reps", size: "xs", color: "#888888", align: "center" },
+          ]},
+          { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+            { type: "text", text: prescription.rest, size: "xs", weight: "bold", color: splitColor, align: "center", wrap: true },
+            { type: "text", text: "พัก", size: "xs", color: "#888888", align: "center" },
+          ]},
+        ],
+      },
+    ];
+
+    const bubble = {
+      type: "bubble", size: "kilo",
+      body: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm", contents: bodyContents },
+    };
+
+    if (hasImage) {
+      bubble.hero = {
+        type: "image",
+        url: ex.gifUrl,
+        size: "full",
+        aspectRatio: "4:3",
+        aspectMode: "cover",
+      };
+    } else {
+      // ถ้าไม่มีรูป ใส่ placeholder สีสวยแทน
+      bubble.hero = {
+        type: "box",
+        layout: "vertical",
+        height: "150px",
+        backgroundColor: splitColor + "33",
+        justifyContent: "center",
+        alignItems: "center",
+        contents: [
+          { type: "text", text: "🏋️", size: "xxl", align: "center" },
+          { type: "text", text: ex.name, size: "xs", color: splitColor, align: "center", wrap: true },
+        ],
+      };
+    }
+
+    return bubble;
+  });
 
   return {
     type: "flex",
