@@ -720,6 +720,7 @@ function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrophy") {
 // ===== BUILD WEIGHT TRAINING BY EQUIPMENT =====
 async function fetchExercisesFromRapidAPI(bodyPart, equipment) {
   try {
+    // equipment mapping ตรงกับ ExerciseDB API
     const equipMap = {
       "body only": "body weight",
       "dumbbell": "dumbbell",
@@ -727,36 +728,42 @@ async function fetchExercisesFromRapidAPI(bodyPart, equipment) {
     };
     const equipQuery = equipMap[equipment] || equipment;
 
-    // ดึงท่าตาม body part ก่อน แล้วกรอง equipment
+    console.log(`Fetching: bodyPart=${bodyPart}, equipment=${equipQuery}`);
+
     const res = await axios.get(
-      `https://exercisedb.p.rapidapi.com/exercises/bodyPart/${bodyPart}`,
+      `https://exercisedb.p.rapidapi.com/exercises/bodyPart/${encodeURIComponent(bodyPart)}`,
       {
         headers: {
           "X-RapidAPI-Key": CONFIG.RAPIDAPI_KEY,
           "X-RapidAPI-Host": "exercisedb.p.rapidapi.com",
         },
-        params: { limit: 50, offset: 0 },
-        timeout: 8000,
+        params: { limit: 100, offset: 0 },
+        timeout: 10000,
       }
     );
 
-    const exercises = res.data || [];
+    const exercises = Array.isArray(res.data) ? res.data : [];
+    console.log(`Got ${exercises.length} exercises for ${bodyPart}`);
+
     // กรองตาม equipment
     const filtered = exercises.filter(ex =>
-      ex.equipment.toLowerCase() === equipQuery.toLowerCase()
+      ex.equipment && ex.equipment.toLowerCase() === equipQuery.toLowerCase()
     );
+    console.log(`Filtered to ${filtered.length} exercises for equipment: ${equipQuery}`);
+
+    if (filtered.length === 0) return null;
 
     // สุ่ม 5 ท่า
-    const shuffled = filtered.sort(() => Math.random() - 0.5);
+    const shuffled = [...filtered].sort(() => Math.random() - 0.5);
     return shuffled.slice(0, 5).map(ex => ({
-      name: ex.name.replace(/(^|\s)\w/g, c => c.toUpperCase()), // capitalize
+      name: ex.name.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
       equipment: ex.equipment,
       target: ex.target,
       gifUrl: ex.gifUrl,
     }));
   } catch (e) {
-    console.error("RapidAPI ExerciseDB error:", e.message);
-    return null; // fallback to local
+    console.error("RapidAPI ExerciseDB error:", e.message, e.response?.status);
+    return null;
   }
 }
 
@@ -770,11 +777,17 @@ async function buildWeightTrainingByEquipment(muscles, equipment) {
   const splitColor = equipment === "body only" ? "#27AE60" : equipment === "dumbbell" ? "#2980B9" : "#E74C3C";
   const prescription = { sets: 4, reps: "10-12", rest: "60-90 วิ" };
 
-  // bodyPart mapping สำหรับ RapidAPI
+  // bodyPart mapping สำหรับ RapidAPI (ต้องตรงกับ API จริงๆ)
   const bodyPartMap = {
-    chest: "chest", shoulders: "shoulders", triceps: "triceps",
-    back: "back", biceps: "upper arms", quads: "upper legs",
-    hamstrings: "upper legs", glutes: "upper legs", calves: "lower legs",
+    chest: "chest",
+    shoulders: "shoulders",
+    triceps: "upper arms",
+    back: "back",
+    biceps: "upper arms",
+    quads: "upper legs",
+    hamstrings: "upper legs",
+    glutes: "upper legs",
+    calves: "lower legs",
     abs: "waist",
   };
 
