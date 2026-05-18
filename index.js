@@ -521,85 +521,81 @@ function buildUpdateNotificationFlex() {
 
 // ===== EXERCISE DATABASE (built-in) =====
 const EXERCISES = {
-  // ===== CHEST =====
   chest: [
-    { name: "Barbell Bench Press", equipment: "barbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bench_Press_-_Medium_Grip/0.jpg" },
-    { name: "Dumbbell Bench Press", equipment: "dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Bench_Press/0.jpg" },
-    { name: "Dumbbell Flyes", equipment: "dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Flyes/0.jpg" },
-    { name: "Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pushups/0.jpg" },
-    { name: "Wide Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Wide-Grip_Barbell_Bench_Press/0.jpg" },
-    { name: "Incline Dumbbell Press", equipment: "dumbbell", target: "Upper Chest", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Incline_Dumbbell_Bench_Press/0.jpg" },
+    { name: "Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://img.youtube.com/vi/IODxDxX7oi4/mqdefault.jpg" },
+    { name: "Wide Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://img.youtube.com/vi/0pkjOk0EiAk/mqdefault.jpg" },
+    { name: "Diamond Push-Up", equipment: "body only", target: "Triceps/Chest", gifUrl: "https://img.youtube.com/vi/J0DnG1_S92I/mqdefault.jpg" },
+    { name: "Dumbbell Bench Press", equipment: "dumbbell", target: "Chest", gifUrl: "https://img.youtube.com/vi/VmB1G1K7v94/mqdefault.jpg" },
+    { name: "Dumbbell Flyes", equipment: "dumbbell", target: "Chest", gifUrl: "https://img.youtube.com/vi/eozdVDA78K0/mqdefault.jpg" },
+    { name: "Incline Dumbbell Press", equipment: "dumbbell", target: "Upper Chest", gifUrl: "https://img.youtube.com/vi/8iPEnn-ltC8/mqdefault.jpg" },
+    { name: "Barbell Bench Press", equipment: "barbell", target: "Chest", gifUrl: "https://img.youtube.com/vi/rT7DgCr-3pg/mqdefault.jpg" },
+    { name: "Incline Barbell Press", equipment: "barbell", target: "Upper Chest", gifUrl: "https://img.youtube.com/vi/DbFgADa2PL8/mqdefault.jpg" },
   ],
-  // ===== SHOULDERS =====
   shoulders: [
-    { name: "Dumbbell Shoulder Press", equipment: "dumbbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Shoulder_Press/0.jpg" },
-    { name: "Barbell Overhead Press", equipment: "barbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Shoulder_Press/0.jpg" },
-    { name: "Dumbbell Lateral Raise", equipment: "dumbbell", target: "Side Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Lateral_Raise/0.jpg" },
-    { name: "Dumbbell Front Raise", equipment: "dumbbell", target: "Front Delts", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Front_Raise/0.jpg" },
-    { name: "Pike Push-Up", equipment: "body only", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pike_Push-up/0.jpg" },
+    { name: "Pike Push-Up", equipment: "body only", target: "Shoulders", gifUrl: "https://img.youtube.com/vi/x7_I5SUAd00/mqdefault.jpg" },
+    { name: "Wall Handstand Hold", equipment: "body only", target: "Shoulders", gifUrl: "https://img.youtube.com/vi/d-IT8kFGuJc/mqdefault.jpg" },
+    { name: "Dumbbell Shoulder Press", equipment: "dumbbell", target: "Shoulders", gifUrl: "https://img.youtube.com/vi/qEwKCR5JCog/mqdefault.jpg" },
+    { name: "Dumbbell Lateral Raise", equipment: "dumbbell", target: "Side Delts", gifUrl: "https://img.youtube.com/vi/3VcKaXpzqRo/mqdefault.jpg" },
+    { name: "Dumbbell Front Raise", equipment: "dumbbell", target: "Front Delts", gifUrl: "https://img.youtube.com/vi/sOoBMDzSMdQ/mqdefault.jpg" },
+    { name: "Barbell Overhead Press", equipment: "barbell", target: "Shoulders", gifUrl: "https://img.youtube.com/vi/2yjwXTZQDDI/mqdefault.jpg" },
   ],
-  // ===== TRICEPS =====
   triceps: [
-    { name: "Barbell Skull Crusher", equipment: "barbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Lying_Triceps_Extension_Skull_Crusher/0.jpg" },
-    { name: "Dumbbell Tricep Kickback", equipment: "dumbbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Kickback/0.jpg" },
-    { name: "Diamond Push-Up", equipment: "body only", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Diamond_Push-up/0.jpg" },
-    { name: "Tricep Dips", equipment: "body only", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Tricep_Dips/0.jpg" },
-    { name: "Dumbbell Overhead Tricep Extension", equipment: "dumbbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_One_Arm_Triceps_Extension/0.jpg" },
+    { name: "Tricep Dips", equipment: "body only", target: "Triceps", gifUrl: "https://img.youtube.com/vi/0326dy_-CzM/mqdefault.jpg" },
+    { name: "Diamond Push-Up", equipment: "body only", target: "Triceps", gifUrl: "https://img.youtube.com/vi/J0DnG1_S92I/mqdefault.jpg" },
+    { name: "Dumbbell Tricep Kickback", equipment: "dumbbell", target: "Triceps", gifUrl: "https://img.youtube.com/vi/ZO36gRPjVkc/mqdefault.jpg" },
+    { name: "Dumbbell Overhead Extension", equipment: "dumbbell", target: "Triceps", gifUrl: "https://img.youtube.com/vi/YbX7Wd8jQ-Q/mqdefault.jpg" },
+    { name: "Skull Crusher", equipment: "barbell", target: "Triceps", gifUrl: "https://img.youtube.com/vi/l3rHYPtMUo8/mqdefault.jpg" },
   ],
-  // ===== BACK =====
   back: [
-    { name: "Pull-Up", equipment: "body only", target: "Lats", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Pullups/0.jpg" },
-    { name: "Chin-Up", equipment: "body only", target: "Lats & Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Chin-up/0.jpg" },
-    { name: "Barbell Bent Over Row", equipment: "barbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Bent_Over_Row/0.jpg" },
-    { name: "Dumbbell One Arm Row", equipment: "dumbbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_One-Arm_Row/0.jpg" },
-    { name: "Superman", equipment: "body only", target: "Lower Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Superman/0.jpg" },
+    { name: "Pull-Up", equipment: "body only", target: "Lats", gifUrl: "https://img.youtube.com/vi/eGo4IYlbE5g/mqdefault.jpg" },
+    { name: "Chin-Up", equipment: "body only", target: "Lats & Biceps", gifUrl: "https://img.youtube.com/vi/brhRXlOhsAM/mqdefault.jpg" },
+    { name: "Superman", equipment: "body only", target: "Lower Back", gifUrl: "https://img.youtube.com/vi/z6PJMT2y8GQ/mqdefault.jpg" },
+    { name: "Dumbbell One Arm Row", equipment: "dumbbell", target: "Back", gifUrl: "https://img.youtube.com/vi/pYcpY20QaE8/mqdefault.jpg" },
+    { name: "Dumbbell Bent Over Row", equipment: "dumbbell", target: "Back", gifUrl: "https://img.youtube.com/vi/FWJR5Ve8bnQ/mqdefault.jpg" },
+    { name: "Barbell Bent Over Row", equipment: "barbell", target: "Back", gifUrl: "https://img.youtube.com/vi/FWJR5Ve8bnQ/mqdefault.jpg" },
+    { name: "Deadlift", equipment: "barbell", target: "Back/Legs", gifUrl: "https://img.youtube.com/vi/op9kVnSso6Q/mqdefault.jpg" },
   ],
-  // ===== BICEPS =====
   biceps: [
-    { name: "Barbell Curl", equipment: "barbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Curl/0.jpg" },
-    { name: "Dumbbell Alternate Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Alternate_Bicep_Curl/0.jpg" },
-    { name: "Dumbbell Hammer Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Alternate_Hammer_Curl/0.jpg" },
-    { name: "Inverted Row", equipment: "body only", target: "Biceps & Back", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Inverted_Row_with_Straps/0.jpg" },
+    { name: "Inverted Row", equipment: "body only", target: "Biceps & Back", gifUrl: "https://img.youtube.com/vi/LMn-FZWmFi4/mqdefault.jpg" },
+    { name: "Dumbbell Alternate Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://img.youtube.com/vi/sAq_ocpRh_I/mqdefault.jpg" },
+    { name: "Dumbbell Hammer Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://img.youtube.com/vi/TwD-YGVP4Bk/mqdefault.jpg" },
+    { name: "Barbell Curl", equipment: "barbell", target: "Biceps", gifUrl: "https://img.youtube.com/vi/kwG2ipFRgfo/mqdefault.jpg" },
   ],
-  // ===== QUADS =====
   quads: [
-    { name: "Barbell Squat", equipment: "barbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Full_Squat/0.jpg" },
-    { name: "Dumbbell Goblet Squat", equipment: "dumbbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Goblet_Squat/0.jpg" },
-    { name: "Bodyweight Squat", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Bodyweight_Squat/0.jpg" },
-    { name: "Jump Squat", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Squat_Jumps/0.jpg" },
-    { name: "Dumbbell Lunge", equipment: "dumbbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Lunge/0.jpg" },
-    { name: "Walking Lunge", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Bodyweight_Walking_Lunge/0.jpg" },
+    { name: "Bodyweight Squat", equipment: "body only", target: "Quads", gifUrl: "https://img.youtube.com/vi/aclHkVaku9U/mqdefault.jpg" },
+    { name: "Jump Squat", equipment: "body only", target: "Quads", gifUrl: "https://img.youtube.com/vi/CVaEhXotL7M/mqdefault.jpg" },
+    { name: "Walking Lunge", equipment: "body only", target: "Quads", gifUrl: "https://img.youtube.com/vi/L8fvypPrv-s/mqdefault.jpg" },
+    { name: "Dumbbell Goblet Squat", equipment: "dumbbell", target: "Quads", gifUrl: "https://img.youtube.com/vi/MxsFDhcyFyE/mqdefault.jpg" },
+    { name: "Dumbbell Lunge", equipment: "dumbbell", target: "Quads", gifUrl: "https://img.youtube.com/vi/D7KaRcUTQeE/mqdefault.jpg" },
+    { name: "Barbell Squat", equipment: "barbell", target: "Quads", gifUrl: "https://img.youtube.com/vi/ultWZbUMPL8/mqdefault.jpg" },
+    { name: "Barbell Front Squat", equipment: "barbell", target: "Quads", gifUrl: "https://img.youtube.com/vi/uYumuL_G_V0/mqdefault.jpg" },
   ],
-  // ===== HAMSTRINGS =====
   hamstrings: [
-    { name: "Barbell Romanian Deadlift", equipment: "barbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Romanian_Deadlift/0.jpg" },
-    { name: "Dumbbell Romanian Deadlift", equipment: "dumbbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Romanian_Deadlift/0.jpg" },
-    { name: "Nordic Hamstring Curl", equipment: "body only", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Natural_Glute_Ham_Raise/0.jpg" },
-    { name: "Glute Bridge", equipment: "body only", target: "Hamstrings & Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Glute_Bridge/0.jpg" },
+    { name: "Glute Bridge", equipment: "body only", target: "Hamstrings", gifUrl: "https://img.youtube.com/vi/OUgsJ8-Vi0E/mqdefault.jpg" },
+    { name: "Nordic Curl", equipment: "body only", target: "Hamstrings", gifUrl: "https://img.youtube.com/vi/d7EKFRIyBg0/mqdefault.jpg" },
+    { name: "Dumbbell Romanian Deadlift", equipment: "dumbbell", target: "Hamstrings", gifUrl: "https://img.youtube.com/vi/hCDzSR6bW10/mqdefault.jpg" },
+    { name: "Barbell Romanian Deadlift", equipment: "barbell", target: "Hamstrings", gifUrl: "https://img.youtube.com/vi/JCXUYuzwNrM/mqdefault.jpg" },
   ],
-  // ===== GLUTES =====
   glutes: [
-    { name: "Barbell Hip Thrust", equipment: "barbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Hip_Thrust/0.jpg" },
-    { name: "Dumbbell Bulgarian Split Squat", equipment: "dumbbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Bulgarian_Split_Squat/0.jpg" },
-    { name: "Donkey Kick", equipment: "body only", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Donkey_Kicks/0.jpg" },
-    { name: "Single Leg Glute Bridge", equipment: "body only", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Glute_Bridge/0.jpg" },
+    { name: "Donkey Kick", equipment: "body only", target: "Glutes", gifUrl: "https://img.youtube.com/vi/SJ1Xuz9D-ZQ/mqdefault.jpg" },
+    { name: "Single Leg Glute Bridge", equipment: "body only", target: "Glutes", gifUrl: "https://img.youtube.com/vi/OUgsJ8-Vi0E/mqdefault.jpg" },
+    { name: "Dumbbell Bulgarian Split Squat", equipment: "dumbbell", target: "Glutes", gifUrl: "https://img.youtube.com/vi/2C-uNgKwPLE/mqdefault.jpg" },
+    { name: "Barbell Hip Thrust", equipment: "barbell", target: "Glutes", gifUrl: "https://img.youtube.com/vi/xDmFkJxPzeM/mqdefault.jpg" },
   ],
-  // ===== CALVES =====
   calves: [
-    { name: "Standing Calf Raise", equipment: "body only", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Standing_Calf_Raises/0.jpg" },
-    { name: "Dumbbell Calf Raise", equipment: "dumbbell", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Calf_Raise/0.jpg" },
-    { name: "Jump Rope", equipment: "body only", target: "Calves", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Jump_Rope/0.jpg" },
+    { name: "Standing Calf Raise", equipment: "body only", target: "Calves", gifUrl: "https://img.youtube.com/vi/gwLzBJYoWlI/mqdefault.jpg" },
+    { name: "Jump Rope", equipment: "body only", target: "Calves", gifUrl: "https://img.youtube.com/vi/FJmRQ5iTXKE/mqdefault.jpg" },
+    { name: "Dumbbell Calf Raise", equipment: "dumbbell", target: "Calves", gifUrl: "https://img.youtube.com/vi/gwLzBJYoWlI/mqdefault.jpg" },
   ],
-  // ===== ABS / CORE =====
   abs: [
-    { name: "Plank", equipment: "body only", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Plank/0.jpg" },
-    { name: "Crunches", equipment: "body only", target: "Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Crunches/0.jpg" },
-    { name: "Leg Raise", equipment: "body only", target: "Lower Abs", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Flat_Bench_Leg_Pull-In/0.jpg" },
-    { name: "Russian Twist", equipment: "body only", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Russian_Twist/0.jpg" },
-    { name: "Mountain Climber", equipment: "body only", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Mountain_Climbers/0.jpg" },
-    { name: "Bicycle Crunch", equipment: "body only", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Air_Bike/0.jpg" },
-    { name: "Dumbbell Side Bend", equipment: "dumbbell", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Side_Bend/0.jpg" },
-    { name: "Barbell Rollout", equipment: "barbell", target: "Core", gifUrl: "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Ab_Rollout/0.jpg" },
+    { name: "Plank", equipment: "body only", target: "Core", gifUrl: "https://img.youtube.com/vi/ASdvN_XEl_c/mqdefault.jpg" },
+    { name: "Crunches", equipment: "body only", target: "Abs", gifUrl: "https://img.youtube.com/vi/Xyd_fa5zoEU/mqdefault.jpg" },
+    { name: "Leg Raise", equipment: "body only", target: "Lower Abs", gifUrl: "https://img.youtube.com/vi/JB2oyawG9KI/mqdefault.jpg" },
+    { name: "Mountain Climber", equipment: "body only", target: "Core", gifUrl: "https://img.youtube.com/vi/nmwgirgXLYM/mqdefault.jpg" },
+    { name: "Bicycle Crunch", equipment: "body only", target: "Obliques", gifUrl: "https://img.youtube.com/vi/1we3bh9uhqY/mqdefault.jpg" },
+    { name: "Russian Twist", equipment: "body only", target: "Obliques", gifUrl: "https://img.youtube.com/vi/wkD8rjkodUI/mqdefault.jpg" },
+    { name: "Dumbbell Side Bend", equipment: "dumbbell", target: "Obliques", gifUrl: "https://img.youtube.com/vi/pBqLMF0T2_o/mqdefault.jpg" },
+    { name: "Barbell Ab Rollout", equipment: "barbell", target: "Core", gifUrl: "https://img.youtube.com/vi/eTKoMwQGMB4/mqdefault.jpg" },
   ],
 };
 
@@ -744,6 +740,10 @@ async function fetchExercisesFromRapidAPI(bodyPart, equipment) {
 
     const exercises = Array.isArray(res.data) ? res.data : [];
     console.log(`Got ${exercises.length} exercises for ${bodyPart}`);
+
+    // log ดู equipment values จริงๆ จาก API
+    const equipValues = [...new Set(exercises.map(e => e.equipment))];
+    console.log(`Equipment values in API: ${equipValues.join(", ")}`);
 
     // กรองตาม equipment
     const filtered = exercises.filter(ex =>
