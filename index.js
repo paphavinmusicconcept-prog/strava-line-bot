@@ -11,6 +11,7 @@ const CONFIG = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   STRAVA_CLIENT_ID: process.env.STRAVA_CLIENT_ID,
   STRAVA_CLIENT_SECRET: process.env.STRAVA_CLIENT_SECRET,
+  RAPIDAPI_KEY: process.env.RAPIDAPI_KEY || "054178c360msh11b2a814097d9e9p1eb967jsn28a2218f2488",
   SERVER_URL: "https://strava-line-bot-production.up.railway.app",
 };
 
@@ -717,31 +718,97 @@ function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrophy") {
 
 
 // ===== BUILD WEIGHT TRAINING BY EQUIPMENT =====
-function buildWeightTrainingByEquipment(muscles, equipment) {
+async function fetchExercisesFromRapidAPI(bodyPart, equipment) {
+  try {
+    const equipMap = {
+      "body only": "body weight",
+      "dumbbell": "dumbbell",
+      "barbell": "barbell",
+    };
+    const equipQuery = equipMap[equipment] || equipment;
+
+    // ดึงท่าตาม body part ก่อน แล้วกรอง equipment
+    const res = await axios.get(
+      `https://exercisedb.p.rapidapi.com/exercises/bodyPart/${bodyPart}`,
+      {
+        headers: {
+          "X-RapidAPI-Key": CONFIG.RAPIDAPI_KEY,
+          "X-RapidAPI-Host": "exercisedb.p.rapidapi.com",
+        },
+        params: { limit: 50, offset: 0 },
+        timeout: 8000,
+      }
+    );
+
+    const exercises = res.data || [];
+    // กรองตาม equipment
+    const filtered = exercises.filter(ex =>
+      ex.equipment.toLowerCase() === equipQuery.toLowerCase()
+    );
+
+    // สุ่ม 5 ท่า
+    const shuffled = filtered.sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, 5).map(ex => ({
+      name: ex.name.replace(/(^|\s)\w/g, c => c.toUpperCase()), // capitalize
+      equipment: ex.equipment,
+      target: ex.target,
+      gifUrl: ex.gifUrl,
+    }));
+  } catch (e) {
+    console.error("RapidAPI ExerciseDB error:", e.message);
+    return null; // fallback to local
+  }
+}
+
+async function buildWeightTrainingByEquipment(muscles, equipment) {
   const equipmentMap = {
     "body only": "Body Weight 🤸",
     "dumbbell": "Dumbbell 🏋️",
     "barbell": "Barbell 🔩",
   };
   const equipLabel = equipmentMap[equipment] || equipment;
-
-  // กรองท่าตามกลุ่มกล้ามเนื้อและอุปกรณ์ (strict filter)
-  let exercises = [];
-  for (const muscle of muscles) {
-    const list = EXERCISES[muscle] || [];
-    const filtered = list.filter(ex => ex.equipment === equipment);
-    if (filtered.length === 0) continue;
-    const shuffled = [...filtered].sort(() => Math.random() - 0.5);
-    exercises = exercises.concat(shuffled.slice(0, 2));
-    if (exercises.length >= 5) break;
-  }
-
-  // ถ้าไม่มีท่าเลย
-  if (exercises.length === 0) return null;
-  exercises = exercises.slice(0, 5);
-
   const splitColor = equipment === "body only" ? "#27AE60" : equipment === "dumbbell" ? "#2980B9" : "#E74C3C";
   const prescription = { sets: 4, reps: "10-12", rest: "60-90 วิ" };
+
+  // bodyPart mapping สำหรับ RapidAPI
+  const bodyPartMap = {
+    chest: "chest", shoulders: "shoulders", triceps: "triceps",
+    back: "back", biceps: "upper arms", quads: "upper legs",
+    hamstrings: "upper legs", glutes: "upper legs", calves: "lower legs",
+    abs: "waist",
+  };
+
+  // ลองดึงจาก RapidAPI ก่อน
+  let exercises = [];
+  const triedParts = new Set();
+
+  for (const muscle of muscles) {
+    const bodyPart = bodyPartMap[muscle];
+    if (!bodyPart || triedParts.has(bodyPart)) continue;
+    triedParts.add(bodyPart);
+
+    const fetched = await fetchExercisesFromRapidAPI(bodyPart, equipment);
+    if (fetched && fetched.length > 0) {
+      exercises = exercises.concat(fetched);
+      if (exercises.length >= 5) break;
+    }
+  }
+
+  // Fallback: ใช้ local database ถ้า API ไม่ตอบ
+  if (exercises.length === 0) {
+    console.log("Falling back to local exercise database");
+    for (const muscle of muscles) {
+      const list = EXERCISES[muscle] || [];
+      const filtered = list.filter(ex => ex.equipment === equipment);
+      if (filtered.length === 0) continue;
+      const shuffled = [...filtered].sort(() => Math.random() - 0.5);
+      exercises = exercises.concat(shuffled.slice(0, 2));
+      if (exercises.length >= 5) break;
+    }
+  }
+
+  if (exercises.length === 0) return null;
+  exercises = exercises.slice(0, 5);
 
   // Header bubble
   const headerBubble = {
@@ -758,9 +825,9 @@ function buildWeightTrainingByEquipment(muscles, equipment) {
       type: "box", layout: "vertical", paddingAll: "16px", spacing: "sm",
       contents: [
         { type: "text", text: "อุปกรณ์:", size: "sm", color: "#555555", weight: "bold" },
-        { type: "text", text: `🏋️ ${equipLabel}`, size: "md", color: splitColor, weight: "bold" },
+        { type: "text", text: equipLabel, size: "md", color: splitColor, weight: "bold" },
         { type: "separator", margin: "md" },
-        { type: "text", text: "👉 เลื่อนดูท่าออกกำลังกายได้เลยค่ะ →", size: "xs", color: "#888888", wrap: true, margin: "md" },
+        { type: "text", text: "👉 เลื่อนดูท่าได้เลยค่ะ →", size: "xs", color: "#888888", wrap: true, margin: "md" },
       ],
     },
   };
@@ -812,14 +879,10 @@ function buildWeightTrainingByEquipment(muscles, equipment) {
         aspectMode: "cover",
       };
     } else {
-      // ถ้าไม่มีรูป ใส่ placeholder สีสวยแทน
       bubble.hero = {
-        type: "box",
-        layout: "vertical",
-        height: "150px",
+        type: "box", layout: "vertical", height: "150px",
         backgroundColor: splitColor + "33",
-        justifyContent: "center",
-        alignItems: "center",
+        justifyContent: "center", alignItems: "center",
         contents: [
           { type: "text", text: "🏋️", size: "xxl", align: "center" },
           { type: "text", text: ex.name, size: "xs", color: splitColor, align: "center", wrap: true },
@@ -1062,7 +1125,7 @@ Step 2: ใช้อุปกรณ์อะไรคะ?`, qrEquipment);
             const bodyPart = session.bodyPart || { label: "Upper Body", muscles: ["chest", "shoulders"] };
             userSessions[userId] = {};
             await pushMessage(userId, `⏳ กำลังสร้างโปรแกรม ${bodyPart.label}...`);
-            const carousel = buildWeightTrainingByEquipment(bodyPart.muscles, equipment);
+            const carousel = await buildWeightTrainingByEquipment(bodyPart.muscles, equipment);
             if (carousel) {
               await pushFlexMessage(userId, carousel);
             } else {
@@ -1085,7 +1148,7 @@ Step 2: ใช้อุปกรณ์อะไรคะ?`, qrEquipment);
               await pushMessage(userId, "เลือก Weight Training วันนี้ได้เลยค่ะ 👇", qr);
             } else {
               await pushMessage(userId, `⏳ กำลังสร้างโปรแกรม ${splitType.toUpperCase()} วันนี้...`);
-              const carousel = buildWeightTrainingCarousel(splitType, goal);
+              const carousel = await buildWeightTrainingCarousel(splitType, goal);
               if (carousel) {
                 await pushFlexMessage(userId, carousel);
               } else {
