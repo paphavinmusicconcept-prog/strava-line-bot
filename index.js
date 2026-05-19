@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
+const { Pool } = require("pg");
 
 const app = express();
 app.use(express.json());
@@ -16,6 +17,180 @@ const CONFIG = {
 };
 
 const anthropic = new Anthropic({ apiKey: CONFIG.ANTHROPIC_API_KEY });
+
+// ===== PostgreSQL DATABASE =====
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL || "postgresql://postgres:lfIXdoZJbKsskzAphIwYIFOHKEmiClrX@postgres.railway.internal:5432/railway",
+  ssl: false,
+});
+
+async function initDB() {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS activities (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        date TIMESTAMP NOT NULL,
+        distance FLOAT,
+        pace FLOAT,
+        duration FLOAT,
+        calories FLOAT,
+        elev_gain FLOAT,
+        cadence INT,
+        source TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS user_challenges (
+        user_id TEXT PRIMARY KEY,
+        goal FLOAT,
+        deadline DATE,
+        start_date DATE,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS user_prs (
+        user_id TEXT PRIMARY KEY,
+        longest_run FLOAT DEFAULT 0,
+        fastest_pace FLOAT DEFAULT 9999,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS strava_tokens (
+        user_id TEXT PRIMARY KEY,
+        access_token TEXT,
+        refresh_token TEXT,
+        expires_at BIGINT,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+    console.log("✅ Database initialized");
+  } catch (e) {
+    console.error("❌ DB init error:", e.message);
+  }
+}
+
+initDB();
+
+// ===== DB HELPERS =====
+async function dbSaveActivity(userId, activity) {
+  try {
+    await db.query(
+      `INSERT INTO activities (user_id, date, distance, pace, duration, calories, elev_gain, cadence, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        userId,
+        activity.date || new Date().toISOString(),
+        activity.distance || 0,
+        activity.pace || 0,
+        activity.duration || 0,
+        activity.calories || 0,
+        activity.elevGain || 0,
+        estimateCadence(activity.pace),
+        activity.source || "manual",
+      ]
+    );
+  } catch (e) {
+    console.error("DB save activity error:", e.message);
+    // fallback to memory
+    await dbSaveActivity(userId, activity);
+  }
+}
+
+async function dbGetActivities(userId, days = 7) {
+  try {
+    const res = await db.query(
+      `SELECT * FROM activities WHERE user_id = $1 AND date > NOW() - INTERVAL '${days} days' ORDER BY date DESC`,
+      [userId]
+    );
+    return res.rows.map(r => ({
+      date: r.date,
+      distance: parseFloat(r.distance),
+      pace: parseFloat(r.pace),
+      duration: parseFloat(r.duration),
+      calories: parseFloat(r.calories),
+      elevGain: parseFloat(r.elev_gain),
+      source: r.source,
+    }));
+  } catch (e) {
+    console.error("DB get activities error:", e.message);
+    return getRecentActivities(userId, days); // fallback to memory
+  }
+}
+
+async function dbSaveChallenge(userId, challenge) {
+  try {
+    await db.query(
+      `INSERT INTO user_challenges (user_id, goal, deadline, start_date)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET goal=$2, deadline=$3, start_date=$4`,
+      [userId, challenge.goal, challenge.deadline, challenge.startDate]
+    );
+  } catch (e) {
+    console.error("DB save challenge error:", e.message);
+  }
+}
+
+async function dbGetChallenge(userId) {
+  try {
+    const res = await db.query(`SELECT * FROM user_challenges WHERE user_id = $1`, [userId]);
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return { goal: r.goal, deadline: r.deadline, startDate: r.start_date };
+  } catch (e) {
+    console.error("DB get challenge error:", e.message);
+    return userChallenges[userId] || null;
+  }
+}
+
+async function dbSavePR(userId, prs) {
+  try {
+    await db.query(
+      `INSERT INTO user_prs (user_id, longest_run, fastest_pace)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE SET longest_run=$2, fastest_pace=$3, updated_at=NOW()`,
+      [userId, prs.longestRun, prs.fastestPace]
+    );
+  } catch (e) {
+    console.error("DB save PR error:", e.message);
+  }
+}
+
+async function dbGetPR(userId) {
+  try {
+    const res = await db.query(`SELECT * FROM user_prs WHERE user_id = $1`, [userId]);
+    if (res.rows.length === 0) return null;
+    return { longestRun: parseFloat(res.rows[0].longest_run), fastestPace: parseFloat(res.rows[0].fastest_pace) };
+  } catch (e) {
+    return userPRs[userId] || null;
+  }
+}
+
+async function dbSaveStravaToken(userId, tokenData) {
+  try {
+    await db.query(
+      `INSERT INTO strava_tokens (user_id, access_token, refresh_token, expires_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET access_token=$2, refresh_token=$3, expires_at=$4, updated_at=NOW()`,
+      [userId, tokenData.access_token, tokenData.refresh_token, tokenData.expires_at]
+    );
+    stravaTokens[userId] = tokenData; // sync to memory
+  } catch (e) {
+    console.error("DB save strava token error:", e.message);
+    stravaTokens[userId] = tokenData; // fallback to memory
+  }
+}
+
+async function dbGetStravaToken(userId) {
+  try {
+    const res = await db.query(`SELECT * FROM strava_tokens WHERE user_id = $1`, [userId]);
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return { access_token: r.access_token, refresh_token: r.refresh_token, expires_at: parseInt(r.expires_at) };
+  } catch (e) {
+    return stravaTokens[userId] || null;
+  }
+}
 
 // ===== DATA STORE =====
 const userSessions = {};
@@ -109,8 +284,18 @@ function convertStravaToActivities(stravaData) {
 async function getActivitiesForUser(userId, days = 7) {
   if (hasStrava(userId)) {
     const stravaData = await getStravaActivities(userId, days);
-    if (stravaData) return convertStravaToActivities(stravaData);
+    if (stravaData) {
+      const converted = convertStravaToActivities(stravaData);
+      // บันทึกลง DB ด้วย
+      for (const a of converted) {
+        await dbSaveActivity(userId, a);
+      }
+      return converted;
+    }
   }
+  // ดึงจาก DB ก่อน ถ้าไม่มีค่อย fallback memory
+  const dbActivities = await dbGetActivities(userId, days);
+  if (dbActivities.length > 0) return dbActivities;
   return getRecentActivities(userId, days);
 }
 
@@ -1134,7 +1319,7 @@ app.post("/webhook", async (req, res) => {
             );
             const activity = extractActivityFromResponse(analysis);
             if (activity) {
-              saveActivity(userId, activity);
+              await dbSaveActivity(userId, activity);
               const prs = checkPR(userId, activity);
               if (prs) await pushFlexMessage(userId, buildPRFlexMessage(prs, "การวิ่งล่าสุด"));
               if (userChallenges[userId]) {
@@ -1296,6 +1481,7 @@ Step 2: ใช้อุปกรณ์อะไรคะ?`, qrEquipment);
               const now = new Date();
               const deadline = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
               userChallenges[userId] = { goal: km, deadline, startDate: now.toISOString().split("T")[0] };
+              await dbSaveChallenge(userId, userChallenges[userId]);
               userSessions[userId] = {};
               await pushMessage(userId, `✅ ตั้ง Challenge สำเร็จแล้วค่ะ!\n🎯 เป้าหมาย: วิ่ง ${km}km ภายใน ${deadline}\n\nกดปุ่ม "เป้าหมาย" เพื่อดู progress ได้เลยนะคะ 💪`);
             }
