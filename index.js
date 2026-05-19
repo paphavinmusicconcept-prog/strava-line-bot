@@ -383,10 +383,10 @@ async function analyzeWithClaude(prompt, imageBase64 = null) {
 - ถ้าผู้ใช้ขี้เกียจหรือหยุดซ้อม จะแซวเบาๆ อย่างเป็นมิตร ไม่ดุหรือกดดัน
 - ให้กำลังใจด้วยความจริงใจ ไม่เสแสร้ง
 
-เมื่อวิเคราะห์รูปผลการวิ่ง ให้อ่านข้อมูลและ return JSON ในรูปแบบนี้ก่อนเสมอ:
+เมื่อวิเคราะห์รูปผลการวิ่ง ให้อ่านข้อมูลและ return JSON แบบนี้ในบรรทัดแรกก่อนเสมอ แต่ห้ามแสดง JSON ให้ user เห็น:
 {"distance": 8.5, "pace": 5.5, "duration": 46.75, "calories": 420, "elevGain": 120, "date": "2026-05-16"}
 โดย pace ให้เป็นตัวเลขทศนิยม เช่น 5:30/km = 5.5
-แล้วค่อยให้ feedback เป็นภาษาไทยตามบุคลิกข้างต้น`,
+จากนั้นให้ feedback เป็นภาษาไทยตามบุคลิกข้างต้นเท่านั้น ห้ามแสดง JSON หรือ code block ใดๆ ให้ user เห็นเด็ดขาด`,
     messages,
   });
   return res.content[0].text;
@@ -1331,8 +1331,13 @@ app.post("/webhook", async (req, res) => {
                 }
               }
             }
-            const feedbackText = analysis.replace(/\{[\s\S]*?\}/, "").trim();
-            await pushMessage(userId, feedbackText || analysis);
+            // ลบ JSON และ code block ออกก่อนส่ง feedback
+            const feedbackText = analysis
+              .replace(/```json[\s\S]*?```/g, "")
+              .replace(/```[\s\S]*?```/g, "")
+              .replace(/\{[\s\S]*?"distance"[\s\S]*?\}/g, "")
+              .trim();
+            await pushMessage(userId, feedbackText || "วิเคราะห์เสร็จแล้วครับ! ดูข้อมูลด้านบนได้เลย 💪");
 
             // ประเมินการวิ่งอัตโนมัติหลังบันทึก
             if (activity) {
@@ -1487,7 +1492,104 @@ Step 2: ใช้อุปกรณ์อะไรคะ?`, qrEquipment);
             }
 
           } else {
-            const response = await analyzeWithClaude(text);
+            // ดึงข้อมูลการวิ่งก่อนตอบ
+            const [recent7, recent30, recent60] = await Promise.all([
+              dbGetActivities(userId, 7),
+              dbGetActivities(userId, 30),
+              dbGetActivities(userId, 60),
+            ]);
+
+            const stats7 = calcStatsFromActivities(recent7);
+            const stats30 = calcStatsFromActivities(recent30);
+            const stats60 = calcStatsFromActivities(recent60);
+            const challenge = await dbGetChallenge(userId);
+            const pr = await dbGetPR(userId);
+
+            // รวม session ล่าสุดจาก memory เข้าไปด้วย (กรณีเพิ่งบันทึก)
+            const memoryRecent = getRecentActivities(userId, 7);
+            const dbRecent7 = recent7 || [];
+            // merge และ deduplicate โดยใช้วันที่
+            const mergedRecent = [...dbRecent7];
+            for (const m of memoryRecent) {
+              const exists = mergedRecent.some(d => 
+                Math.abs(new Date(d.date) - new Date(m.date)) < 60000 && d.distance === m.distance
+              );
+              if (!exists) mergedRecent.push(m);
+            }
+            mergedRecent.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            // สร้าง context จากข้อมูลจริง
+            let userContext = "=== ข้อมูลการวิ่งของ user ===\n";
+            
+            // เพิ่มข้อมูล session ล่าสุด
+            if (mergedRecent.length > 0) {
+              const latest = mergedRecent[0];
+              const lPaceMin = Math.floor(latest.pace || 0);
+              const lPaceSec = Math.round(((latest.pace || 0) - lPaceMin) * 60);
+              const lDate = new Date(latest.date).toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long" });
+              userContext += `\n🏃 การวิ่งล่าสุด (${lDate}):\n`;
+              userContext += `- ระยะทาง: ${(latest.distance||0).toFixed(2)}km\n`;
+              userContext += `- Pace: ${lPaceMin}:${String(lPaceSec).padStart(2,"0")}/km\n`;
+              userContext += `- เวลา: ${Math.floor(latest.duration||0)} นาที\n`;
+              userContext += `- แคลอรี่: ${(latest.calories||0).toFixed(0)} kcal\n`;
+              userContext += `- Elevation: ${(latest.elevGain||0).toFixed(0)}m\n`;
+              userContext += `- แหล่งข้อมูล: ${latest.source || "manual"}\n`;
+            }
+
+            if (stats7) {
+              userContext += `\n📅 7 วันล่าสุด:\n`;
+              userContext += `- วิ่ง ${stats7.count} ครั้ง รวม ${stats7.totalDistance.toFixed(1)}km\n`;
+              userContext += `- Pace เฉลี่ย ${stats7.avgPaceMin}:${String(stats7.avgPaceSec).padStart(2,"0")}/km\n`;
+              userContext += `- แคลอรี่รวม ${stats7.totalCalories.toFixed(0)} kcal\n`;
+            } else {
+              userContext += `\n📅 7 วันล่าสุด: ไม่มีข้อมูล\n`;
+            }
+
+            if (stats30) {
+              userContext += `\n📅 30 วันล่าสุด:\n`;
+              userContext += `- วิ่ง ${stats30.count} ครั้ง รวม ${stats30.totalDistance.toFixed(1)}km\n`;
+              userContext += `- Pace เฉลี่ย ${stats30.avgPaceMin}:${String(stats30.avgPaceSec).padStart(2,"0")}/km\n`;
+            } else {
+              userContext += `\n📅 30 วันล่าสุด: ไม่มีข้อมูล\n`;
+            }
+
+            if (stats60) {
+              userContext += `\n📅 60 วันล่าสุด:\n`;
+              userContext += `- วิ่ง ${stats60.count} ครั้ง รวม ${stats60.totalDistance.toFixed(1)}km\n`;
+              userContext += `- Pace เฉลี่ย ${stats60.avgPaceMin}:${String(stats60.avgPaceSec).padStart(2,"0")}/km\n`;
+            }
+
+            if (pr) {
+              const prPaceMin = Math.floor(pr.fastestPace);
+              const prPaceSec = Math.round((pr.fastestPace - prPaceMin) * 60);
+              userContext += `\n🏅 Personal Records:\n`;
+              userContext += `- วิ่งไกลสุด: ${pr.longestRun.toFixed(2)}km\n`;
+              userContext += `- Pace เร็วสุด: ${prPaceMin}:${String(prPaceSec).padStart(2,"0")}/km\n`;
+            }
+
+            if (challenge) {
+              const allAct = await dbGetActivities(userId, 30);
+              const allStats = calcStatsFromActivities(allAct);
+              const currentKm = allStats ? allStats.totalDistance : 0;
+              userContext += `\n🎯 Challenge ปัจจุบัน:\n`;
+              userContext += `- เป้าหมาย ${challenge.goal}km ภายใน ${challenge.deadline}\n`;
+              userContext += `- วิ่งไปแล้ว ${currentKm.toFixed(1)}km (${((currentKm/challenge.goal)*100).toFixed(0)}%)\n`;
+            }
+
+            // ตรวจจับ pattern
+            if (stats7 && stats30) {
+              const weeklyAvg30 = stats30.totalDistance / 4;
+              const weekly7 = stats7.totalDistance;
+              if (weekly7 < weeklyAvg30 * 0.7) {
+                userContext += `\n⚠️ สังเกตว่า: สัปดาห์นี้วิ่งน้อยกว่าค่าเฉลี่ยปกติ ${((1 - weekly7/weeklyAvg30)*100).toFixed(0)}%\n`;
+              } else if (weekly7 > weeklyAvg30 * 1.3) {
+                userContext += `\n⚠️ สังเกตว่า: สัปดาห์นี้วิ่งมากกว่าค่าเฉลี่ยปกติ ${((weekly7/weeklyAvg30 - 1)*100).toFixed(0)}%\n`;
+              }
+            }
+
+            userContext += `\n=== คำถามของ user ===\n${text}`;
+
+            const response = await analyzeWithClaude(userContext);
             await pushMessage(userId, response);
           }
         }
