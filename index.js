@@ -226,9 +226,70 @@ function extractActivityFromResponse(text) {
 }
 
 // ===== FLEX MESSAGE BUILDERS =====
+function estimateHRZones(paceDecimal) {
+  // ประมาณ HR zone จาก pace
+  if (!paceDecimal || paceDecimal <= 0) return { z1: 10, z2: 40, z3: 35, z4: 15 };
+  if (paceDecimal < 4.5) return { z1: 5, z2: 15, z3: 30, z4: 50 };
+  if (paceDecimal < 5.5) return { z1: 5, z2: 25, z3: 45, z4: 25 };
+  if (paceDecimal < 6.5) return { z1: 10, z2: 45, z3: 35, z4: 10 };
+  if (paceDecimal < 7.5) return { z1: 15, z2: 55, z3: 25, z4: 5 };
+  return { z1: 20, z2: 60, z3: 15, z4: 5 };
+}
+
+function estimateCadence(paceDecimal) {
+  // ประมาณ cadence จาก pace (spm)
+  if (!paceDecimal || paceDecimal <= 0) return 160;
+  if (paceDecimal < 4.5) return 185;
+  if (paceDecimal < 5.5) return 178;
+  if (paceDecimal < 6.5) return 170;
+  if (paceDecimal < 7.5) return 163;
+  return 155;
+}
+
+function buildHRZoneBar(zones) {
+  const total = zones.z1 + zones.z2 + zones.z3 + zones.z4;
+  const z1w = Math.round((zones.z1 / total) * 10);
+  const z2w = Math.round((zones.z2 / total) * 10);
+  const z3w = Math.round((zones.z3 / total) * 10);
+  const z4w = 10 - z1w - z2w - z3w;
+
+  const zoneColors = ["#64B5F6", "#81C784", "#FFD54F", "#FF7043"];
+  const zoneLabels = ["Z1", "Z2", "Z3", "Z4"];
+  const zoneWidths = [z1w, z2w, z3w, z4w];
+  const zonePcts = [zones.z1, zones.z2, zones.z3, zones.z4];
+
+  return [
+    { type: "text", text: "❤️ Heart Rate Zones", size: "sm", color: "#555555", weight: "bold", margin: "md" },
+    {
+      type: "box", layout: "horizontal", margin: "sm", height: "16px", cornerRadius: "4px",
+      contents: zoneWidths.map((w, i) => ({
+        type: "box", layout: "vertical", flex: w || 1,
+        backgroundColor: zoneColors[i],
+        contents: [],
+      })),
+    },
+    {
+      type: "box", layout: "horizontal", margin: "xs",
+      contents: zoneLabels.map((label, i) => ({
+        type: "box", layout: "vertical", flex: 1, alignItems: "center",
+        contents: [
+          { type: "text", text: label, size: "xxs", color: zoneColors[i], weight: "bold", align: "center" },
+          { type: "text", text: `${zonePcts[i]}%`, size: "xxs", color: "#888888", align: "center" },
+        ],
+      })),
+    },
+  ];
+}
+
 function buildStatsFlexMessage(stats, label) {
   if (!stats) return null;
-  const { count, totalDistance, avgPaceMin, avgPaceSec, totalCalories, activities } = stats;
+  const { totalDistance, avgPaceMin, avgPaceSec, totalCalories, activities } = stats;
+
+  // คำนวณ cadence และ HR zones จาก pace เฉลี่ย
+  const avgPaceDecimal = avgPaceMin + avgPaceSec / 60;
+  const cadence = estimateCadence(avgPaceDecimal);
+  const hrZones = estimateHRZones(avgPaceDecimal);
+
   const activityRows = activities.slice(0, 5).map((a) => {
     const date = new Date(a.date).toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short" });
     const pMin = Math.floor(a.pace || 0);
@@ -242,6 +303,7 @@ function buildStatsFlexMessage(stats, label) {
       ],
     };
   });
+
   return {
     type: "flex", altText: `🏃 สรุปการวิ่ง${label}`,
     contents: {
@@ -256,6 +318,7 @@ function buildStatsFlexMessage(stats, label) {
       body: {
         type: "box", layout: "vertical", paddingAll: "16px",
         contents: [
+          // Stats หลัก - ลบครั้งออก เพิ่ม cadence
           {
             type: "box", layout: "horizontal",
             contents: [
@@ -264,19 +327,23 @@ function buildStatsFlexMessage(stats, label) {
                 { type: "text", text: "km รวม", size: "xs", color: "#888888", align: "center" },
               ]},
               { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: `${count}`, size: "xl", weight: "bold", color: "#E8703A", align: "center" },
-                { type: "text", text: "ครั้ง", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
                 { type: "text", text: avgPaceMin > 0 ? `${avgPaceMin}:${String(avgPaceSec).padStart(2,"0")}` : "-", size: "xl", weight: "bold", color: "#E8703A", align: "center" },
                 { type: "text", text: "pace /km", size: "xs", color: "#888888", align: "center" },
+              ]},
+              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
+                { type: "text", text: `${cadence}`, size: "xl", weight: "bold", color: "#E8703A", align: "center" },
+                { type: "text", text: "spm รอบขา", size: "xs", color: "#888888", align: "center" },
               ]},
             ],
             paddingBottom: "12px",
           },
           { type: "separator" },
+          // HR Zone bar
+          ...buildHRZoneBar(hrZones),
+          { type: "separator", margin: "md" },
+          // Activity rows
           {
-            type: "box", layout: "horizontal", paddingTop: "12px", paddingBottom: "4px",
+            type: "box", layout: "horizontal", paddingTop: "8px", paddingBottom: "4px",
             contents: [
               { type: "text", text: "วันที่", size: "xs", color: "#888888", flex: 3 },
               { type: "text", text: "ระยะ", size: "xs", color: "#888888", flex: 2, align: "center" },
@@ -1081,6 +1148,23 @@ app.post("/webhook", async (req, res) => {
             }
             const feedbackText = analysis.replace(/\{[\s\S]*?\}/, "").trim();
             await pushMessage(userId, feedbackText || analysis);
+
+            // ประเมินการวิ่งอัตโนมัติหลังบันทึก
+            if (activity) {
+              const pMin = Math.floor(activity.pace || 0);
+              const pSec = Math.round(((activity.pace || 0) - pMin) * 60);
+              const cadence = estimateCadence(activity.pace);
+              const zones = estimateHRZones(activity.pace);
+              const evalPrompt = `ประเมินการวิ่งนี้ให้หน่อยครับ:
+- ระยะทาง: ${activity.distance}km
+- Pace: ${pMin}:${String(pSec).padStart(2,"0")}/km
+- เวลา: ${Math.floor(activity.duration)} นาที
+- รอบขาโดยประมาณ: ${cadence} spm
+- HR Zone โดยประมาณ: Zone1 ${zones.z1}%, Zone2 ${zones.z2}%, Zone3 ${zones.z3}%, Zone4 ${zones.z4}%
+ให้ feedback สั้นๆ 2-3 ประโยค เน้น cadence และ zone ที่วิ่งอยู่ว่าเหมาะสมไหม ควรปรับอะไรบ้าง`;
+              const evalResult = await analyzeWithClaude(evalPrompt);
+              await pushMessage(userId, `📊 การประเมินการวิ่ง:\n${evalResult}`);
+            }
           }
 
         // ไฟล์
@@ -1101,8 +1185,10 @@ app.post("/webhook", async (req, res) => {
               const pMin = Math.floor(gpxData.pace);
               const pSec = Math.round((gpxData.pace - pMin) * 60);
               await pushMessage(userId, `✅ บันทึกการวิ่งสำเร็จค่ะ!\n📏 ${gpxData.distance}km | ⏱ ${pMin}:${String(pSec).padStart(2,"0")}/km | ⏰ ${Math.floor(gpxData.duration)} นาที | ⛰ ${gpxData.elevGain}m`);
-              const analysis = await analyzeWithClaude(`วิเคราะห์การวิ่งนี้ให้หน่อยค่ะ: ${gpxData.distance}km pace ${pMin}:${String(pSec).padStart(2,"0")}/km เวลา ${Math.floor(gpxData.duration)} นาที elevation ${gpxData.elevGain}m ตอบภาษาไทย`);
-              await pushMessage(userId, analysis);
+              const cadenceGPX = estimateCadence(gpxData.pace);
+              const zonesGPX = estimateHRZones(gpxData.pace);
+              const analysisGPX = await analyzeWithClaude(`วิเคราะห์และประเมินการวิ่งนี้ให้หน่อยครับ: ${gpxData.distance}km pace ${pMin}:${String(pSec).padStart(2,"0")}/km เวลา ${Math.floor(gpxData.duration)} นาที elevation ${gpxData.elevGain}m รอบขาโดยประมาณ ${cadenceGPX} spm HR Zone โดยประมาณ Z1:${zonesGPX.z1}% Z2:${zonesGPX.z2}% Z3:${zonesGPX.z3}% Z4:${zonesGPX.z4}% ตอบภาษาไทย`);
+              await pushMessage(userId, analysisGPX);
             } else {
               await pushMessage(userId, "❌ ไม่สามารถอ่านไฟล์ GPX ได้ค่ะ ลองส่งรูป screenshot แทนได้เลยนะคะ 📸");
             }
