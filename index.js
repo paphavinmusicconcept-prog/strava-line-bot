@@ -2,9 +2,14 @@ const express = require("express");
 const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
+const crypto = require("crypto");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = Buffer.from(buf);
+  },
+}));
 
 const CONFIG = {
   LINE_CHANNEL_ACCESS_TOKEN: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -14,15 +19,132 @@ const CONFIG = {
   STRAVA_CLIENT_SECRET: process.env.STRAVA_CLIENT_SECRET,
   RAPIDAPI_KEY: process.env.RAPIDAPI_KEY,
   SERVER_URL: process.env.SERVER_URL || "https://strava-line-bot-production.up.railway.app",
+  TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY,
 };
+
+const dbSsl =
+  process.env.DATABASE_SSL === "false"
+    ? false
+    : {
+        rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false",
+        ...(process.env.DATABASE_CA_CERT
+          ? { ca: process.env.DATABASE_CA_CERT.replace(/\\n/g, "\n") }
+          : {}),
+      };
+
+function validateConfig() {
+  const required = [
+    ["LINE_CHANNEL_ACCESS_TOKEN", CONFIG.LINE_CHANNEL_ACCESS_TOKEN],
+    ["LINE_CHANNEL_SECRET", CONFIG.LINE_CHANNEL_SECRET],
+    ["ANTHROPIC_API_KEY", CONFIG.ANTHROPIC_API_KEY],
+    ["DATABASE_URL", process.env.DATABASE_URL],
+  ];
+
+  const missing = required.filter(([, value]) => !value).map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
+  }
+
+  const missingStrava = [
+    ["STRAVA_CLIENT_ID", CONFIG.STRAVA_CLIENT_ID],
+    ["STRAVA_CLIENT_SECRET", CONFIG.STRAVA_CLIENT_SECRET],
+  ].filter(([, value]) => !value).map(([name]) => name);
+
+  if (missingStrava.length > 0) {
+    console.warn(`Strava integration is disabled until these variables are set: ${missingStrava.join(", ")}`);
+  }
+
+  if (!CONFIG.TOKEN_ENCRYPTION_KEY) {
+    const message = "TOKEN_ENCRYPTION_KEY is required in production to encrypt Strava tokens at rest.";
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(message);
+    }
+    console.warn(`${message} Development mode will remain backward-compatible plaintext.`);
+  }
+}
+
+function getTokenCipherKey() {
+  if (!CONFIG.TOKEN_ENCRYPTION_KEY) return null;
+  return crypto.createHash("sha256").update(CONFIG.TOKEN_ENCRYPTION_KEY).digest();
+}
+
+function encryptSecret(value) {
+  if (!value) return value;
+
+  const key = getTokenCipherKey();
+  if (!key) return value;
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return `enc:v1:${iv.toString("base64")}:${tag.toString("base64")}:${encrypted.toString("base64")}`;
+}
+
+function decryptSecret(value) {
+  if (!value || !String(value).startsWith("enc:v1:")) return value;
+
+  const key = getTokenCipherKey();
+  if (!key) {
+    throw new Error("TOKEN_ENCRYPTION_KEY is required to decrypt stored Strava tokens");
+  }
+
+  const [, , ivB64, tagB64, encryptedB64] = String(value).split(":");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"));
+  decipher.setAuthTag(Buffer.from(tagB64, "base64"));
+
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedB64, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+function encryptTokenData(tokenData) {
+  return {
+    ...tokenData,
+    access_token: encryptSecret(tokenData.access_token),
+    refresh_token: encryptSecret(tokenData.refresh_token),
+  };
+}
+
+function decryptTokenData(tokenData) {
+  if (!tokenData) return null;
+
+  return {
+    access_token: decryptSecret(tokenData.access_token),
+    refresh_token: decryptSecret(tokenData.refresh_token),
+    expires_at: parseInt(tokenData.expires_at, 10),
+  };
+}
+
+function isLineSignatureValid(req) {
+  const signature = req.get("x-line-signature");
+  if (!CONFIG.LINE_CHANNEL_SECRET || !signature || !req.rawBody) return false;
+
+  const expectedSignature = crypto
+    .createHmac("sha256", CONFIG.LINE_CHANNEL_SECRET)
+    .update(req.rawBody)
+    .digest("base64");
+
+  const expected = Buffer.from(expectedSignature);
+  const received = Buffer.from(signature);
+
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
+
+function normalizeLookbackDays(days, fallback = 7) {
+  const parsed = Number.parseInt(days, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, 1), 365);
+}
 
 const anthropic = new Anthropic({ apiKey: CONFIG.ANTHROPIC_API_KEY });
 
 // ===== PostgreSQL DATABASE =====
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false},
+  ssl: dbSsl,
 });
 
 async function initDB() {
@@ -39,8 +161,12 @@ async function initDB() {
         elev_gain FLOAT,
         cadence INT,
         source TEXT,
+        source_activity_id TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       );
+
+      ALTER TABLE activities
+        ADD COLUMN IF NOT EXISTS source_activity_id TEXT;
 
       CREATE TABLE IF NOT EXISTS user_challenges (
         user_id TEXT PRIMARY KEY,
@@ -96,16 +222,25 @@ async function initDB() {
 
       CREATE INDEX IF NOT EXISTS idx_user_memory_user_id ON user_memory(user_id);
       CREATE INDEX IF NOT EXISTS idx_conversation_history_user_id_created_at ON conversation_history(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_activities_user_id_date ON activities(user_id, date DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_unique_source_activity
+        ON activities(user_id, source, source_activity_id)
+        WHERE source_activity_id IS NOT NULL;
     `);
     console.log("✅ Database initialized");
 
     const tokens = await db.query(`SELECT * FROM strava_tokens`);
     for (const row of tokens.rows) {
-      stravaTokens[row.user_id] = {
-        access_token: row.access_token,
-        refresh_token: row.refresh_token,
-        expires_at: parseInt(row.expires_at),
-      };
+      const tokenData = decryptTokenData(row);
+      stravaTokens[row.user_id] = tokenData;
+
+      if (
+        CONFIG.TOKEN_ENCRYPTION_KEY &&
+        (!String(row.access_token || "").startsWith("enc:v1:") ||
+          !String(row.refresh_token || "").startsWith("enc:v1:"))
+      ) {
+        await dbSaveStravaToken(row.user_id, tokenData);
+      }
     }
 
     const prs = await db.query(`SELECT * FROM user_prs`);
@@ -127,17 +262,27 @@ async function initDB() {
 
   } catch (e) {
     console.error("❌ DB init error:", e.message);
+    throw e;
   }
 }
-
-initDB();
 
 // ===== DB HELPERS =====
 async function dbSaveActivity(userId, activity) {
   try {
     await db.query(
-      `INSERT INTO activities (user_id, date, distance, pace, duration, calories, elev_gain, cadence, source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO activities
+        (user_id, date, distance, pace, duration, calories, elev_gain, cadence, source, source_activity_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (user_id, source, source_activity_id)
+       WHERE source_activity_id IS NOT NULL
+       DO UPDATE SET
+         date = EXCLUDED.date,
+         distance = EXCLUDED.distance,
+         pace = EXCLUDED.pace,
+         duration = EXCLUDED.duration,
+         calories = EXCLUDED.calories,
+         elev_gain = EXCLUDED.elev_gain,
+         cadence = EXCLUDED.cadence`,
       [
         userId,
         activity.date || new Date().toISOString(),
@@ -148,6 +293,7 @@ async function dbSaveActivity(userId, activity) {
         activity.elevGain || 0,
         estimateCadence(activity.pace),
         activity.source || "manual",
+        activity.sourceActivityId ? String(activity.sourceActivityId) : null,
       ]
     );
   } catch (e) {
@@ -158,9 +304,14 @@ async function dbSaveActivity(userId, activity) {
 
 async function dbGetActivities(userId, days = 7) {
   try {
+    const safeDays = normalizeLookbackDays(days);
     const res = await db.query(
-      `SELECT * FROM activities WHERE user_id = $1 AND date > NOW() - INTERVAL '${days} days' ORDER BY date DESC`,
-      [userId]
+      `SELECT *
+       FROM activities
+       WHERE user_id = $1
+         AND date > NOW() - ($2::int * INTERVAL '1 day')
+       ORDER BY date DESC`,
+      [userId, safeDays]
     );
     return res.rows.map(r => ({
       date: r.date,
@@ -170,6 +321,7 @@ async function dbGetActivities(userId, days = 7) {
       calories: parseFloat(r.calories),
       elevGain: parseFloat(r.elev_gain),
       source: r.source,
+      sourceActivityId: r.source_activity_id,
     }));
   } catch (e) {
     console.error("DB get activities error:", e.message);
@@ -230,11 +382,17 @@ async function dbGetPR(userId) {
 
 async function dbSaveStravaToken(userId, tokenData) {
   try {
+    const encryptedTokenData = encryptTokenData(tokenData);
     await db.query(
       `INSERT INTO strava_tokens (user_id, access_token, refresh_token, expires_at)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_id) DO UPDATE SET access_token=$2, refresh_token=$3, expires_at=$4, updated_at=NOW()`,
-      [userId, tokenData.access_token, tokenData.refresh_token, tokenData.expires_at]
+      [
+        userId,
+        encryptedTokenData.access_token,
+        encryptedTokenData.refresh_token,
+        encryptedTokenData.expires_at,
+      ]
     );
     stravaTokens[userId] = tokenData;
   } catch (e) {
@@ -247,12 +405,7 @@ async function dbGetStravaToken(userId) {
   try {
     const res = await db.query(`SELECT * FROM strava_tokens WHERE user_id = $1`, [userId]);
     if (res.rows.length === 0) return null;
-    const r = res.rows[0];
-    return {
-      access_token: r.access_token,
-      refresh_token: r.refresh_token,
-      expires_at: parseInt(r.expires_at),
-    };
+    return decryptTokenData(res.rows[0]);
   } catch (e) {
     return stravaTokens[userId] || null;
   }
@@ -529,8 +682,8 @@ const userPRs = {};
 const stravaTokens = {};
 
 // ===== HELPERS =====
-function hasStrava(userId) {
-  return !!stravaTokens[userId];
+async function hasStrava(userId) {
+  return !!(stravaTokens[userId] || await dbGetStravaToken(userId));
 }
 
 function saveActivity(userId, activity) {
@@ -541,7 +694,8 @@ function saveActivity(userId, activity) {
 
 function getRecentActivities(userId, days = 7) {
   if (!userActivities[userId]) return [];
-  const cutoff = Date.now() - days * 86400000;
+  const safeDays = normalizeLookbackDays(days);
+  const cutoff = Date.now() - safeDays * 86400000;
   return userActivities[userId].filter(a => new Date(a.date).getTime() > cutoff);
 }
 
@@ -598,12 +752,16 @@ async function refreshStravaToken(lineUserId) {
   }
 
   try {
-    const res = await axios.post("https://www.strava.com/oauth/token", {
-      client_id: CONFIG.STRAVA_CLIENT_ID,
-      client_secret: CONFIG.STRAVA_CLIENT_SECRET,
-      grant_type: "refresh_token",
-      refresh_token: tokenData.refresh_token,
-    });
+    const res = await axios.post(
+      "https://www.strava.com/oauth/token",
+      {
+        client_id: CONFIG.STRAVA_CLIENT_ID,
+        client_secret: CONFIG.STRAVA_CLIENT_SECRET,
+        grant_type: "refresh_token",
+        refresh_token: tokenData.refresh_token,
+      },
+      { timeout: 10000 }
+    );
 
     const newTokenData = {
       access_token: res.data.access_token,
@@ -622,7 +780,8 @@ async function refreshStravaToken(lineUserId) {
 const stravaCache = {};
 
 async function getStravaActivities(lineUserId, days = 7) {
-  const cacheKey = `${lineUserId}_${days}`;
+  const safeDays = normalizeLookbackDays(days);
+  const cacheKey = `${lineUserId}_${safeDays}`;
   const cached = stravaCache[cacheKey];
 
   if (cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
@@ -633,7 +792,7 @@ async function getStravaActivities(lineUserId, days = 7) {
   if (!token) return null;
 
   try {
-    const after = Math.floor((Date.now() - days * 86400000) / 1000);
+    const after = Math.floor((Date.now() - safeDays * 86400000) / 1000);
 
     const res = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
       headers: { Authorization: `Bearer ${token}` },
@@ -664,14 +823,17 @@ function convertStravaToActivities(stravaData) {
         calories: a.kilojoules || 0,
         elevGain: a.total_elevation_gain || 0,
         source: "Strava",
+        sourceActivityId: a.id,
         name: a.name,
       };
     });
 }
 
 async function getActivitiesForUser(userId, days = 7) {
-  if (hasStrava(userId)) {
-    const stravaData = await getStravaActivities(userId, days);
+  const safeDays = normalizeLookbackDays(days);
+
+  if (await hasStrava(userId)) {
+    const stravaData = await getStravaActivities(userId, safeDays);
 
     if (stravaData) {
       const converted = convertStravaToActivities(stravaData);
@@ -684,10 +846,10 @@ async function getActivitiesForUser(userId, days = 7) {
     }
   }
 
-  const dbActivities = await dbGetActivities(userId, days);
+  const dbActivities = await dbGetActivities(userId, safeDays);
   if (dbActivities.length > 0) return dbActivities;
 
-  return getRecentActivities(userId, days);
+  return getRecentActivities(userId, safeDays);
 }
 
 // ===== PR CHECKER =====
@@ -738,22 +900,71 @@ function checkPR(userId, activity) {
   return prs.length > 0 ? prs : null;
 }
 // ===== GPX PARSER =====
+function getXmlAttribute(tagAttributes, name) {
+  const match = tagAttributes.match(new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, "i"));
+  return match ? match[1] : null;
+}
+
+function getXmlChildText(xmlBlock, tagName) {
+  const match = xmlBlock.match(
+    new RegExp(`<(?:\\w+:)?${tagName}\\b[^>]*>([\\s\\S]*?)<\\/(?:\\w+:)?${tagName}>`, "i")
+  );
+  return match ? match[1].trim() : null;
+}
+
+function extractGpxPoints(xmlText, pointTagName) {
+  const points = [];
+  const pointRegex = new RegExp(
+    `<((?:\\w+:)?${pointTagName})\\b([^>]*)>([\\s\\S]*?)<\\/\\1>`,
+    "gi"
+  );
+
+  let match;
+  while ((match = pointRegex.exec(xmlText)) !== null) {
+    const lat = parseFloat(getXmlAttribute(match[2], "lat"));
+    const lon = parseFloat(getXmlAttribute(match[2], "lon"));
+    const eleText = getXmlChildText(match[3], "ele");
+    const timeText = getXmlChildText(match[3], "time");
+    const ele = eleText === null ? null : parseFloat(eleText);
+    const time = timeText ? new Date(timeText) : null;
+
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      !time ||
+      Number.isNaN(time.getTime())
+    ) {
+      continue;
+    }
+
+    points.push({
+      lat,
+      lon,
+      ele: Number.isFinite(ele) ? ele : null,
+      time,
+    });
+  }
+
+  return points;
+}
+
+function distanceKmBetweenPoints(p1, p2) {
+  const R = 6371;
+  const dLat = (p2.lat - p1.lat) * Math.PI / 180;
+  const dLon = (p2.lon - p1.lon) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(p1.lat * Math.PI / 180) *
+      Math.cos(p2.lat * Math.PI / 180) *
+      Math.sin(dLon / 2) ** 2;
+
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function parseGPX(xmlText) {
   try {
-    const points = [];
-    const trkptRegex =
-      /<trkpt lat="([\d.-]+)" lon="([\d.-]+)"[^>]*>[\s\S]*?<ele>([\d.]+)<\/ele>[\s\S]*?<time>([^<]+)<\/time>/g;
-
-    let match;
-
-    while ((match = trkptRegex.exec(xmlText)) !== null) {
-      points.push({
-        lat: parseFloat(match[1]),
-        lon: parseFloat(match[2]),
-        ele: parseFloat(match[3]),
-        time: new Date(match[4]),
-      });
-    }
+    const points = extractGpxPoints(xmlText, "trkpt");
 
     if (points.length < 2) return null;
 
@@ -764,19 +975,9 @@ function parseGPX(xmlText) {
       const p1 = points[i - 1];
       const p2 = points[i];
 
-      const R = 6371;
-      const dLat = (p2.lat - p1.lat) * Math.PI / 180;
-      const dLon = (p2.lon - p1.lon) * Math.PI / 180;
+      totalDist += distanceKmBetweenPoints(p1, p2);
 
-      const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(p1.lat * Math.PI / 180) *
-          Math.cos(p2.lat * Math.PI / 180) *
-          Math.sin(dLon / 2) ** 2;
-
-      totalDist += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-      if (p2.ele > p1.ele) {
+      if (Number.isFinite(p1.ele) && Number.isFinite(p2.ele) && p2.ele > p1.ele) {
         totalElevGain += p2.ele - p1.ele;
       }
     }
@@ -785,6 +986,7 @@ function parseGPX(xmlText) {
       (points[points.length - 1].time - points[0].time) / 1000 / 60;
 
     const pace = totalDist > 0 ? duration / totalDist : 0;
+    if (duration <= 0 || pace <= 0) return null;
 
     return {
       date: points[0].time.toISOString(),
@@ -1132,7 +1334,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
 
           {
             type: "separator",
-            margin: "1g",
+            margin: "lg",
           },
           
           {
@@ -1444,7 +1646,7 @@ function buildStatsFlexMessage(stats, label) {
             ],
           },
           ...activityRows,
-          { type: "separator", margin: "12px" },
+          { type: "separator", margin: "md" },
           {
             type: "box",
             layout: "horizontal",
@@ -1760,7 +1962,7 @@ function buildChallengeFlexMessage(userId, currentKm) {
             align: "center",
             margin: "md",
           },
-          { type: "separator", margin: "12px" },
+          { type: "separator", margin: "md" },
           {
             type: "box",
             layout: "horizontal",
@@ -1961,6 +2163,7 @@ async function pushMessage(userId, text, quickReply = null) {
       headers: {
         Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
       },
+      timeout: 10000,
     }
   );
 }
@@ -1976,6 +2179,7 @@ async function replyMessage(replyToken, messages) {
       headers: {
         Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
       },
+      timeout: 10000,
     }
   );
 }
@@ -1991,6 +2195,7 @@ async function pushFlexMessage(userId, flexContent) {
       headers: {
         Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
       },
+      timeout: 10000,
     }
   );
 }
@@ -2036,6 +2241,11 @@ ${text}
 
 // ===== WEBHOOK =====
 app.post("/webhook", async (req, res) => {
+  if (!isLineSignatureValid(req)) {
+    console.warn("Rejected LINE webhook request with invalid signature");
+    return res.sendStatus(401);
+  }
+
   res.sendStatus(200);
 
   const events = req.body.events || [];
@@ -2159,6 +2369,7 @@ app.post("/webhook", async (req, res) => {
                 Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
               },
               responseType: "arraybuffer",
+              timeout: 10000,
             }
           );
 
@@ -2223,6 +2434,7 @@ app.post("/webhook", async (req, res) => {
                 Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
               },
               responseType: "text",
+              timeout: 10000,
             }
           );
 
@@ -2298,6 +2510,16 @@ app.get("/health", (req, res) => {
 // ===== SERVER START =====
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-}); 
+async function startServer() {
+  validateConfig();
+  await initDB();
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+  });
+}
+
+startServer().catch((e) => {
+  console.error("Failed to start server:", e);
+  process.exit(1);
+});
