@@ -1,9 +1,13 @@
-const express = require("express");
+﻿const express = require("express");
 const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
-const crypto = require("crypto");
 const logger = require("./src/logger");
+const { createConfig, createDbSsl, validateConfig } = require("./src/config");
+const { createTokenCrypto } = require("./src/security/tokenCrypto");
+const { isLineSignatureValid } = require("./src/security/lineSignature");
+const { createLineService } = require("./src/services/lineService");
+const { createClaudeService } = require("./src/services/claudeService");
 const { runMigrations } = require("./src/db/migrations");
 const { createActivityRepository } = require("./src/repositories/activityRepository");
 const { assertRateLimit } = require("./src/services/rateLimitService");
@@ -20,127 +24,12 @@ app.use(express.json({
   },
 }));
 
-const CONFIG = {
-  LINE_CHANNEL_ACCESS_TOKEN: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  LINE_CHANNEL_SECRET: process.env.LINE_CHANNEL_SECRET,
-  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-  STRAVA_CLIENT_ID: process.env.STRAVA_CLIENT_ID,
-  STRAVA_CLIENT_SECRET: process.env.STRAVA_CLIENT_SECRET,
-  RAPIDAPI_KEY: process.env.RAPIDAPI_KEY,
-  SERVER_URL: process.env.SERVER_URL || "https://strava-line-bot-production.up.railway.app",
-  TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY,
-};
+const CONFIG = createConfig();
+const dbSsl = createDbSsl();
 
-const dbSsl =
-  process.env.DATABASE_SSL === "false"
-    ? false
-    : {
-        rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false",
-        ...(process.env.DATABASE_CA_CERT
-          ? { ca: process.env.DATABASE_CA_CERT.replace(/\\n/g, "\n") }
-          : {}),
-      };
-
-function validateConfig() {
-  const required = [
-    ["LINE_CHANNEL_ACCESS_TOKEN", CONFIG.LINE_CHANNEL_ACCESS_TOKEN],
-    ["LINE_CHANNEL_SECRET", CONFIG.LINE_CHANNEL_SECRET],
-    ["ANTHROPIC_API_KEY", CONFIG.ANTHROPIC_API_KEY],
-    ["DATABASE_URL", process.env.DATABASE_URL],
-  ];
-
-  const missing = required.filter(([, value]) => !value).map(([name]) => name);
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
-  }
-
-  const missingStrava = [
-    ["STRAVA_CLIENT_ID", CONFIG.STRAVA_CLIENT_ID],
-    ["STRAVA_CLIENT_SECRET", CONFIG.STRAVA_CLIENT_SECRET],
-  ].filter(([, value]) => !value).map(([name]) => name);
-
-  if (missingStrava.length > 0) {
-    console.warn(`Strava integration is disabled until these variables are set: ${missingStrava.join(", ")}`);
-  }
-
-  if (!CONFIG.TOKEN_ENCRYPTION_KEY) {
-    const message = "TOKEN_ENCRYPTION_KEY is required in production to encrypt Strava tokens at rest.";
-    if (process.env.NODE_ENV === "production") {
-      throw new Error(message);
-    }
-    console.warn(`${message} Development mode will remain backward-compatible plaintext.`);
-  }
-}
-
-function getTokenCipherKey() {
-  if (!CONFIG.TOKEN_ENCRYPTION_KEY) return null;
-  return crypto.createHash("sha256").update(CONFIG.TOKEN_ENCRYPTION_KEY).digest();
-}
-
-function encryptSecret(value) {
-  if (!value) return value;
-
-  const key = getTokenCipherKey();
-  if (!key) return value;
-
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([cipher.update(String(value), "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-
-  return `enc:v1:${iv.toString("base64")}:${tag.toString("base64")}:${encrypted.toString("base64")}`;
-}
-
-function decryptSecret(value) {
-  if (!value || !String(value).startsWith("enc:v1:")) return value;
-
-  const key = getTokenCipherKey();
-  if (!key) {
-    throw new Error("TOKEN_ENCRYPTION_KEY is required to decrypt stored Strava tokens");
-  }
-
-  const [, , ivB64, tagB64, encryptedB64] = String(value).split(":");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"));
-  decipher.setAuthTag(Buffer.from(tagB64, "base64"));
-
-  return Buffer.concat([
-    decipher.update(Buffer.from(encryptedB64, "base64")),
-    decipher.final(),
-  ]).toString("utf8");
-}
-
-function encryptTokenData(tokenData) {
-  return {
-    ...tokenData,
-    access_token: encryptSecret(tokenData.access_token),
-    refresh_token: encryptSecret(tokenData.refresh_token),
-  };
-}
-
-function decryptTokenData(tokenData) {
-  if (!tokenData) return null;
-
-  return {
-    access_token: decryptSecret(tokenData.access_token),
-    refresh_token: decryptSecret(tokenData.refresh_token),
-    expires_at: parseInt(tokenData.expires_at, 10),
-  };
-}
-
-function isLineSignatureValid(req) {
-  const signature = req.get("x-line-signature");
-  if (!CONFIG.LINE_CHANNEL_SECRET || !signature || !req.rawBody) return false;
-
-  const expectedSignature = crypto
-    .createHmac("sha256", CONFIG.LINE_CHANNEL_SECRET)
-    .update(req.rawBody)
-    .digest("base64");
-
-  const expected = Buffer.from(expectedSignature);
-  const received = Buffer.from(signature);
-
-  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
-}
+const { encryptTokenData, decryptTokenData } = createTokenCrypto({
+  encryptionKey: CONFIG.TOKEN_ENCRYPTION_KEY,
+});
 
 function normalizeLookbackDays(days, fallback = 7) {
   const parsed = Number.parseInt(days, 10);
@@ -522,7 +411,7 @@ async function loadUserContext(userId) {
 async function extractMemoryFromChat(userId, userText, assistantText) {
   try {
     const prompt = `
-อ่านข้อความต่อไปนี้ แล้วดึงข้อมูลระยะยาวที่ควรจำเกี่ยวกับนักวิ่งคนนี้
+à¸­à¹ˆà¸²à¸™à¸‚à¹‰à¸­à¸„à¸§à¸²à¸¡à¸•à¹ˆà¸­à¹„à¸›à¸™à¸µà¹‰ à¹à¸¥à¹‰à¸§à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸£à¸°à¸¢à¸°à¸¢à¸²à¸§à¸—à¸µà¹ˆà¸„à¸§à¸£à¸ˆà¸³à¹€à¸à¸µà¹ˆà¸¢à¸§à¸à¸±à¸šà¸™à¸±à¸à¸§à¸´à¹ˆà¸‡à¸„à¸™à¸™à¸µà¹‰
 
 User:
 ${userText}
@@ -530,7 +419,7 @@ ${userText}
 Assistant:
 ${assistantText}
 
-ให้ตอบเป็น JSON เท่านั้น ห้ามมีคำอธิบายอื่น
+à¹ƒà¸«à¹‰à¸•à¸­à¸šà¹€à¸›à¹‡à¸™ JSON à¹€à¸—à¹ˆà¸²à¸™à¸±à¹‰à¸™ à¸«à¹‰à¸²à¸¡à¸¡à¸µà¸„à¸³à¸­à¸˜à¸´à¸šà¸²à¸¢à¸­à¸·à¹ˆà¸™
 
 Schema:
 {
@@ -546,16 +435,16 @@ Schema:
   "memories": [
     {
       "memory_type": "goal|injury|preference|schedule|motivation|note",
-      "content": "ข้อความที่ควรจำ",
+      "content": "à¸‚à¹‰à¸­à¸„à¸§à¸²à¸¡à¸—à¸µà¹ˆà¸„à¸§à¸£à¸ˆà¸³",
       "importance": 1
     }
   ]
 }
 
-กติกา:
-- เก็บเฉพาะข้อมูลที่น่าจะใช้ได้นาน
-- อย่าเก็บข้อความทั่วไป
-- ถ้าไม่มีข้อมูลใหม่ ให้ profile ทุกช่องเป็น null และ memories เป็น []
+à¸à¸•à¸´à¸à¸²:
+- à¹€à¸à¹‡à¸šà¹€à¸‰à¸žà¸²à¸°à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸—à¸µà¹ˆà¸™à¹ˆà¸²à¸ˆà¸°à¹ƒà¸Šà¹‰à¹„à¸”à¹‰à¸™à¸²à¸™
+- à¸­à¸¢à¹ˆà¸²à¹€à¸à¹‡à¸šà¸‚à¹‰à¸­à¸„à¸§à¸²à¸¡à¸—à¸±à¹ˆà¸§à¹„à¸›
+- à¸–à¹‰à¸²à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¹ƒà¸«à¸¡à¹ˆ à¹ƒà¸«à¹‰ profile à¸—à¸¸à¸à¸Šà¹ˆà¸­à¸‡à¹€à¸›à¹‡à¸™ null à¹à¸¥à¸° memories à¹€à¸›à¹‡à¸™ []
 `;
 
     const raw = await analyzeWithClaude(prompt);
@@ -784,9 +673,9 @@ function checkPR(userId, activity) {
 
   if (activity.distance && activity.distance > pr.longestRun) {
     if (pr.longestRun && pr.longestRun > 0) {
-      prs.push(`🏅 PR ระยะทาง! ${activity.distance.toFixed(2)}km (เดิม ${pr.longestRun.toFixed(2)}km)`);
+      prs.push(`ðŸ… PR à¸£à¸°à¸¢à¸°à¸—à¸²à¸‡! ${activity.distance.toFixed(2)}km (à¹€à¸”à¸´à¸¡ ${pr.longestRun.toFixed(2)}km)`);
     } else {
-      prs.push(`🏅 PR ระยะทางครั้งแรก! ${activity.distance.toFixed(2)}km`);
+      prs.push(`ðŸ… PR à¸£à¸°à¸¢à¸°à¸—à¸²à¸‡à¸„à¸£à¸±à¹‰à¸‡à¹à¸£à¸! ${activity.distance.toFixed(2)}km`);
     }
 
     pr.longestRun = activity.distance;
@@ -805,11 +694,11 @@ function checkPR(userId, activity) {
       const oldSec = Math.round((pr.fastestPace - oldMin) * 60);
 
       prs.push(
-        `⚡ PR Pace! ${pMin}:${String(pSec).padStart(2, "0")}/km (เดิม ${oldMin}:${String(oldSec).padStart(2, "0")}/km)`
+        `âš¡ PR Pace! ${pMin}:${String(pSec).padStart(2, "0")}/km (à¹€à¸”à¸´à¸¡ ${oldMin}:${String(oldSec).padStart(2, "0")}/km)`
       );
     } else {
       prs.push(
-        `⚡ PR Pace ครั้งแรก! ${pMin}:${String(pSec).padStart(2, "0")}/km`
+        `âš¡ PR Pace à¸„à¸£à¸±à¹‰à¸‡à¹à¸£à¸! ${pMin}:${String(pSec).padStart(2, "0")}/km`
       );
     }
 
@@ -924,103 +813,11 @@ function parseGPX(xmlText) {
     return null;
   }
 }
-// ===== CLAUDE HELPERS =====
-async function analyzeWithClaudeWithHistory(prompt, history = []) {
-  try {
-    const safeHistory = Array.isArray(history)
-      ? history.filter(m => m.role && m.content).slice(-12)
-      : [];
-
-    const messages = [
-      ...safeHistory,
-      { role: "user", content: prompt },
-    ];
-
-    const res = await withRetry(() => anthropic.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 1500,
-      system: `คุณคืออาจารย์นักวิ่ง AI ผู้ชายที่มีประสบการณ์สูง ผ่านการแข่งมาราธอนและอัลตร้ามาราธอนมาแล้วนับไม่ถ้วน
-
-บุคลิก:
-- เป็นกันเอง สนุก เฮฮา
-- ใช้คำว่า "เฮ้ย", "โอ้โห", "เจ๋งมาก!" บ้างเป็นครั้งคราว
-- เรียกตัวเองว่า "อาจารย์" หรือ "ผม"
-- ตอบภาษาไทยเป็นหลัก
-- motivate ผู้ใช้เสมอ
-- ถ้าขี้เกียจให้แซวเบา ๆ ไม่ดุ
-- ใช้ข้อมูล user context ให้มากที่สุด
-- ถ้าข้อมูลไม่พอ ให้ถามต่อแบบธรรมชาติ`,
-      messages,
-    }), {
-      onRetry: (error, meta) => logger.warn("Retrying Claude request with history", {
-        error: error.message,
-        ...meta,
-      }),
-    });
-
-    return res.content?.[0]?.text || "ขอโทษครับ อาจารย์ยังตอบไม่ได้ตอนนี้";
-  } catch (e) {
-    console.error("Claude with history error:", e.message);
-    return await analyzeWithClaude(prompt);
-  }
-}
-
-async function analyzeWithClaude(prompt, imageBase64 = null) {
-  try {
-    const messages = [];
-
-    if (imageBase64) {
-      messages.push({
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/jpeg",
-              data: imageBase64,
-            },
-          },
-          { type: "text", text: prompt },
-        ],
-      });
-    } else {
-      messages.push({
-        role: "user",
-        content: prompt,
-      });
-    }
-
-    const res = await withRetry(() => anthropic.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 1500,
-      system: `คุณคืออาจารย์นักวิ่ง AI ผู้ชายที่มีประสบการณ์สูง มีความรู้ลึกด้านการวิ่ง โภชนาการ และการฝึกซ้อม
-
-บุคลิก:
-- เป็นกันเอง สนุก เฮฮา
-- ใช้ภาษาไทยเป็นหลัก
-- เรียกตัวเองว่า "อาจารย์" หรือ "ผม"
-- ชอบ motivate และฉลองความสำเร็จเล็ก ๆ
-- ถ้าผู้ใช้ส่งรูปผลการวิ่ง ให้อ่านค่าและคืน JSON บรรทัดแรกเสมอ แต่ห้ามอธิบาย JSON ให้ user เห็น
-
-เมื่อวิเคราะห์รูปผลการวิ่ง ให้ return JSON แบบนี้ในบรรทัดแรก:
-{"distance": 8.5, "pace": 5.5, "duration": 46.75, "calories": 420, "elevGain": 120, "date": "2026-05-16"}
-
-pace เป็นตัวเลขทศนิยม เช่น 5:30/km = 5.5`,
-      messages,
-    }), {
-      onRetry: (error, meta) => logger.warn("Retrying Claude request", {
-        error: error.message,
-        ...meta,
-      }),
-    });
-
-    return res.content?.[0]?.text || "";
-  } catch (e) {
-    console.error("Claude error:", e.message);
-    return "ขอโทษครับ ตอนนี้ AI วิเคราะห์ไม่ได้ชั่วคราว ลองใหม่อีกครั้งนะครับ";
-  }
-}
+const { analyzeWithClaudeWithHistory, analyzeWithClaude } = createClaudeService({
+  anthropic,
+  logger,
+  withRetry,
+});
 
 function extractActivityFromResponse(text) {
   try {
@@ -1096,7 +893,7 @@ function buildHRZoneBar(zones) {
   return [
     {
       type: "text",
-      text: "❤️ Heart Rate Zones",
+      text: "â¤ï¸ Heart Rate Zones",
       size: "sm",
       color: "#555555",
       weight: "bold",
@@ -1161,7 +958,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
 
   return {
     type: "flex",
-    altText: "สถิติวันนี้",
+    altText: "à¸ªà¸–à¸´à¸•à¸´à¸§à¸±à¸™à¸™à¸µà¹‰",
     contents: {
       type: "bubble",
       size: "mega",
@@ -1173,14 +970,14 @@ function buildTodayStatsFlexMessage(activity = {}) {
         contents: [
           {
             type: "text",
-            text: "สถิติวันนี้",
+            text: "à¸ªà¸–à¸´à¸•à¸´à¸§à¸±à¸™à¸™à¸µà¹‰",
             size: "xl",
             weight: "bold",
             color: "#111111",
           },
           {
             type: "text",
-            text: "ผลการวิ่งล่าสุดของคุณ",
+            text: "à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸¥à¹ˆà¸²à¸ªà¸¸à¸”à¸‚à¸­à¸‡à¸„à¸¸à¸“",
             size: "sm",
             color: "#8A8A8A",
             margin: "sm",
@@ -1250,7 +1047,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
                   },
                   {
                     type: "text",
-                    text: "เวลา",
+                    text: "à¹€à¸§à¸¥à¸²",
                     size: "xs",
                     color: "#8A8A8A",
                     align: "center",
@@ -1282,7 +1079,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
                 layout: "vertical",
                 flex: 1,
                 contents: [
-                  { type: "text", text: "🔥", size: "lg", align: "center" },
+                  { type: "text", text: "ðŸ”¥", size: "lg", align: "center" },
                   {
                     type: "text",
                     text: `${calories}`,
@@ -1305,7 +1102,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
                 layout: "vertical",
                 flex: 1,
                 contents: [
-                  { type: "text", text: "👟", size: "lg", align: "center" },
+                  { type: "text", text: "ðŸ‘Ÿ", size: "lg", align: "center" },
                   {
                     type: "text",
                     text: `${cadence}`,
@@ -1328,7 +1125,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
                 layout: "vertical",
                 flex: 1,
                 contents: [
-                  { type: "text", text: "⛰️", size: "lg", align: "center" },
+                  { type: "text", text: "â›°ï¸", size: "lg", align: "center" },
                   {
                     type: "text",
                     text: `${elevGain}m`,
@@ -1365,7 +1162,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
               },
               {
                 type: "text",
-                text: "วันนี้ pace ค่อนข้างนิ่งดี ลองคุมให้อยู่โซนสบาย ๆ เพื่อสะสมความต่อเนื่อง",
+                text: "à¸§à¸±à¸™à¸™à¸µà¹‰ pace à¸„à¹ˆà¸­à¸™à¸‚à¹‰à¸²à¸‡à¸™à¸´à¹ˆà¸‡à¸”à¸µ à¸¥à¸­à¸‡à¸„à¸¸à¸¡à¹ƒà¸«à¹‰à¸­à¸¢à¸¹à¹ˆà¹‚à¸‹à¸™à¸ªà¸šà¸²à¸¢ à¹† à¹€à¸žà¸·à¹ˆà¸­à¸ªà¸°à¸ªà¸¡à¸„à¸§à¸²à¸¡à¸•à¹ˆà¸­à¹€à¸™à¸·à¹ˆà¸­à¸‡",
                 size: "sm",
                 color: "#555555",
                 wrap: true,
@@ -1380,7 +1177,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
             color: "#06C755",
             action: {
               type: "postback",
-              label: "ดูคำแนะนำวันนี้",
+              label: "à¸”à¸¹à¸„à¸³à¹à¸™à¸°à¸™à¸³à¸§à¸±à¸™à¸™à¸µà¹‰",
               data: "action=today_recommendation",
             },
           },
@@ -1440,7 +1237,7 @@ function buildStatsFlexMessage(stats, label) {
 
   return {
     type: "flex",
-    altText: `🏃 สรุปการวิ่ง${label}`,
+    altText: `ðŸƒ à¸ªà¸£à¸¸à¸›à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡${label}`,
     contents: {
       type: "bubble",
       header: {
@@ -1451,14 +1248,14 @@ function buildStatsFlexMessage(stats, label) {
         contents: [
           {
             type: "text",
-            text: "🏃 อาจารย์นักวิ่ง",
+            text: "ðŸƒ à¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸™à¸±à¸à¸§à¸´à¹ˆà¸‡",
             color: "#ffffff",
             size: "sm",
             weight: "bold",
           },
           {
             type: "text",
-            text: `สรุปการวิ่ง${label}`,
+            text: `à¸ªà¸£à¸¸à¸›à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡${label}`,
             color: "#ffffff99",
             size: "xs",
           },
@@ -1489,7 +1286,7 @@ function buildStatsFlexMessage(stats, label) {
                   },
                   {
                     type: "text",
-                    text: "km รวม",
+                    text: "km à¸£à¸§à¸¡",
                     size: "xs",
                     color: "#888888",
                     align: "center",
@@ -1535,7 +1332,7 @@ function buildStatsFlexMessage(stats, label) {
                   },
                   {
                     type: "text",
-                    text: "spm รอบขา",
+                    text: "spm à¸£à¸­à¸šà¸‚à¸²",
                     size: "xs",
                     color: "#888888",
                     align: "center",
@@ -1556,14 +1353,14 @@ function buildStatsFlexMessage(stats, label) {
             contents: [
               {
                 type: "text",
-                text: "วันที่",
+                text: "à¸§à¸±à¸™à¸—à¸µà¹ˆ",
                 size: "xs",
                 color: "#888888",
                 flex: 3,
               },
               {
                 type: "text",
-                text: "ระยะ",
+                text: "à¸£à¸°à¸¢à¸°",
                 size: "xs",
                 color: "#888888",
                 flex: 2,
@@ -1588,7 +1385,7 @@ function buildStatsFlexMessage(stats, label) {
             contents: [
               {
                 type: "text",
-                text: "🔥 แคลอรี่รวม",
+                text: "ðŸ”¥ à¹à¸„à¸¥à¸­à¸£à¸µà¹ˆà¸£à¸§à¸¡",
                 size: "sm",
                 color: "#555555",
               },
@@ -1630,7 +1427,7 @@ function buildCarouselMessage(activities) {
         contents: [
           {
             type: "text",
-            text: `📍 ${a.source || "Manual"}`,
+            text: `ðŸ“ ${a.source || "Manual"}`,
             color: "#ffffff",
             size: "xs",
           },
@@ -1720,7 +1517,7 @@ function buildCarouselMessage(activities) {
                   },
                   {
                     type: "text",
-                    text: "นาที",
+                    text: "à¸™à¸²à¸—à¸µ",
                     size: "xs",
                     color: "#888888",
                     align: "center",
@@ -1778,7 +1575,7 @@ function buildCarouselMessage(activities) {
 
   return {
     type: "flex",
-    altText: "📋 ประวัติวิ่ง 5 ครั้งล่าสุด",
+    altText: "ðŸ“‹ à¸›à¸£à¸°à¸§à¸±à¸•à¸´à¸§à¸´à¹ˆà¸‡ 5 à¸„à¸£à¸±à¹‰à¸‡à¸¥à¹ˆà¸²à¸ªà¸¸à¸”",
     contents: {
       type: "carousel",
       contents: bubbles,
@@ -1798,15 +1595,15 @@ function buildChallengeFlexMessage(userId, currentKm) {
   );
 
   const progressBar =
-    "█".repeat(Math.floor(progress / 10)) +
-    "░".repeat(10 - Math.floor(progress / 10));
+    "â–ˆ".repeat(Math.floor(progress / 10)) +
+    "â–‘".repeat(10 - Math.floor(progress / 10));
 
   const color =
     progress >= 100 ? "#27AE60" : progress >= 50 ? "#E8703A" : "#E74C3C";
 
   return {
     type: "flex",
-    altText: `🎯 Challenge: ${challenge.goal}km`,
+    altText: `ðŸŽ¯ Challenge: ${challenge.goal}km`,
     contents: {
       type: "bubble",
       header: {
@@ -1817,14 +1614,14 @@ function buildChallengeFlexMessage(userId, currentKm) {
         contents: [
           {
             type: "text",
-            text: "🎯 Challenge ของคุณ",
+            text: "ðŸŽ¯ Challenge à¸‚à¸­à¸‡à¸„à¸¸à¸“",
             color: "#ffffff",
             size: "sm",
             weight: "bold",
           },
           {
             type: "text",
-            text: progress >= 100 ? "🏆 สำเร็จแล้ว!" : `เหลืออีก ${daysLeft} วัน`,
+            text: progress >= 100 ? "ðŸ† à¸ªà¸³à¹€à¸£à¹‡à¸ˆà¹à¸¥à¹‰à¸§!" : `à¹€à¸«à¸¥à¸·à¸­à¸­à¸µà¸ ${daysLeft} à¸§à¸±à¸™`,
             color: "#ffffff99",
             size: "xs",
           },
@@ -1856,7 +1653,7 @@ function buildChallengeFlexMessage(userId, currentKm) {
                   },
                   {
                     type: "text",
-                    text: "km วิ่งแล้ว",
+                    text: "km à¸§à¸´à¹ˆà¸‡à¹à¸¥à¹‰à¸§",
                     size: "xs",
                     color: "#888888",
                     align: "center",
@@ -1879,7 +1676,7 @@ function buildChallengeFlexMessage(userId, currentKm) {
                   },
                   {
                     type: "text",
-                    text: "km เป้าหมาย",
+                    text: "km à¹€à¸›à¹‰à¸²à¸«à¸¡à¸²à¸¢",
                     size: "xs",
                     color: "#888888",
                     align: "center",
@@ -1906,14 +1703,14 @@ function buildChallengeFlexMessage(userId, currentKm) {
                 type: "text",
                 text:
                   progress >= 100
-                    ? "🎉 ทำได้แล้วครับ!"
-                    : `เหลืออีก ${remaining.toFixed(1)} km`,
+                    ? "ðŸŽ‰ à¸—à¸³à¹„à¸”à¹‰à¹à¸¥à¹‰à¸§à¸„à¸£à¸±à¸š!"
+                    : `à¹€à¸«à¸¥à¸·à¸­à¸­à¸µà¸ ${remaining.toFixed(1)} km`,
                 size: "sm",
                 color: "#555555",
               },
               {
                 type: "text",
-                text: `${daysLeft} วัน`,
+                text: `${daysLeft} à¸§à¸±à¸™`,
                 size: "sm",
                 color,
                 align: "end",
@@ -1930,7 +1727,7 @@ function buildChallengeFlexMessage(userId, currentKm) {
 function buildPRFlexMessage(prs, activityName) {
   return {
     type: "flex",
-    altText: "🏅 คุณทำ PR แล้ว!",
+    altText: "ðŸ… à¸„à¸¸à¸“à¸—à¸³ PR à¹à¸¥à¹‰à¸§!",
     contents: {
       type: "bubble",
       header: {
@@ -1941,7 +1738,7 @@ function buildPRFlexMessage(prs, activityName) {
         contents: [
           {
             type: "text",
-            text: "🏅 Personal Record!",
+            text: "ðŸ… Personal Record!",
             color: "#ffffff",
             size: "md",
             weight: "bold",
@@ -1949,7 +1746,7 @@ function buildPRFlexMessage(prs, activityName) {
           },
           {
             type: "text",
-            text: "ยอดเยี่ยมมากครับ! 🎉",
+            text: "à¸¢à¸­à¸”à¹€à¸¢à¸µà¹ˆà¸¢à¸¡à¸¡à¸²à¸à¸„à¸£à¸±à¸š! ðŸŽ‰",
             color: "#ffffff99",
             size: "sm",
             align: "center",
@@ -1963,7 +1760,7 @@ function buildPRFlexMessage(prs, activityName) {
         contents: [
           {
             type: "text",
-            text: activityName || "กิจกรรมล่าสุด",
+            text: activityName || "à¸à¸´à¸ˆà¸à¸£à¸£à¸¡à¸¥à¹ˆà¸²à¸ªà¸¸à¸”",
             size: "sm",
             color: "#888888",
             align: "center",
@@ -1979,7 +1776,7 @@ function buildPRFlexMessage(prs, activityName) {
           })),
           {
             type: "text",
-            text: "อาจารย์ขอปรบมือให้เลย 💪",
+            text: "à¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸‚à¸­à¸›à¸£à¸šà¸¡à¸·à¸­à¹ƒà¸«à¹‰à¹€à¸¥à¸¢ ðŸ’ª",
             size: "sm",
             color: "#E8703A",
             margin: "lg",
@@ -1995,7 +1792,7 @@ function buildPRFlexMessage(prs, activityName) {
 function buildUpdateNotificationFlex() {
   return {
     type: "flex",
-    altText: "🆕 อาจารย์นักวิ่ง AI Beta 2.0",
+    altText: "ðŸ†• à¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸™à¸±à¸à¸§à¸´à¹ˆà¸‡ AI Beta 2.0",
     contents: {
       type: "bubble",
       header: {
@@ -2006,14 +1803,14 @@ function buildUpdateNotificationFlex() {
         contents: [
           {
             type: "text",
-            text: "🏃 อาจารย์นักวิ่ง AI",
+            text: "ðŸƒ à¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸™à¸±à¸à¸§à¸´à¹ˆà¸‡ AI",
             color: "#E8703A",
             size: "md",
             weight: "bold",
           },
           {
             type: "text",
-            text: "Beta 2.0 — มีอะไรใหม่บ้าง?",
+            text: "Beta 2.0 â€” à¸¡à¸µà¸­à¸°à¹„à¸£à¹ƒà¸«à¸¡à¹ˆà¸šà¹‰à¸²à¸‡?",
             color: "#ffffff",
             size: "sm",
           },
@@ -2027,35 +1824,35 @@ function buildUpdateNotificationFlex() {
         contents: [
           {
             type: "text",
-            text: "✨ AI จำเป้าหมายและบริบทของคุณได้",
+            text: "âœ¨ AI à¸ˆà¸³à¹€à¸›à¹‰à¸²à¸«à¸¡à¸²à¸¢à¹à¸¥à¸°à¸šà¸£à¸´à¸šà¸—à¸‚à¸­à¸‡à¸„à¸¸à¸“à¹„à¸”à¹‰",
             size: "sm",
             color: "#333333",
             wrap: true,
           },
           {
             type: "text",
-            text: "📸 ส่ง screenshot ผลการวิ่งให้ AI วิเคราะห์ได้",
+            text: "ðŸ“¸ à¸ªà¹ˆà¸‡ screenshot à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¹ƒà¸«à¹‰ AI à¸§à¸´à¹€à¸„à¸£à¸²à¸°à¸«à¹Œà¹„à¸”à¹‰",
             size: "sm",
             color: "#333333",
             wrap: true,
           },
           {
             type: "text",
-            text: "📊 สรุปสถิติรายวันและรายสัปดาห์",
+            text: "ðŸ“Š à¸ªà¸£à¸¸à¸›à¸ªà¸–à¸´à¸•à¸´à¸£à¸²à¸¢à¸§à¸±à¸™à¹à¸¥à¸°à¸£à¸²à¸¢à¸ªà¸±à¸›à¸”à¸²à¸«à¹Œ",
             size: "sm",
             color: "#333333",
             wrap: true,
           },
           {
             type: "text",
-            text: "🎯 ตั้ง Challenge พร้อม Progress Bar",
+            text: "ðŸŽ¯ à¸•à¸±à¹‰à¸‡ Challenge à¸žà¸£à¹‰à¸­à¸¡ Progress Bar",
             size: "sm",
             color: "#333333",
             wrap: true,
           },
           {
             type: "text",
-            text: "🏅 ตรวจจับ PR อัตโนมัติ",
+            text: "ðŸ… à¸•à¸£à¸§à¸ˆà¸ˆà¸±à¸š PR à¸­à¸±à¸•à¹‚à¸™à¸¡à¸±à¸•à¸´",
             size: "sm",
             color: "#333333",
             wrap: true,
@@ -2066,109 +1863,19 @@ function buildUpdateNotificationFlex() {
   };
 }
 
-// ===== LINE MESSAGING =====
-function makeQuickReply(items) {
-  return {
-    items: items.map(i => ({
-      type: "action",
-      action: {
-        type: "message",
-        label: i.label,
-        text: i.text,
-      },
-    })),
-  };
-}
-
-async function pushMessage(userId, text, quickReply = null) {
-  await withRetry(
-    () => axios.post(
-      "https://api.line.me/v2/bot/message/push",
-      {
-        to: userId,
-        messages: [
-          {
-            type: "text",
-            text,
-            ...(quickReply ? { quickReply } : {}),
-          },
-        ],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
-        },
-        timeout: 10000,
-      }
-    ),
-    {
-      onRetry: (error, meta) => logger.warn("Retrying LINE push message", {
-        error: error.message,
-        ...meta,
-      }),
-    }
-  );
-}
-
-async function replyMessage(replyToken, messages) {
-  await withRetry(
-    () => axios.post(
-      "https://api.line.me/v2/bot/message/reply",
-      {
-        replyToken,
-        messages: Array.isArray(messages) ? messages : [messages],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
-        },
-        timeout: 10000,
-      }
-    ),
-    {
-      onRetry: (error, meta) => logger.warn("Retrying LINE reply message", {
-        error: error.message,
-        ...meta,
-      }),
-    }
-  );
-}
-
-async function pushFlexMessage(userId, flexContent) {
-  await withRetry(
-    () => axios.post(
-      "https://api.line.me/v2/bot/message/push",
-      {
-        to: userId,
-        messages: [flexContent],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
-        },
-        timeout: 10000,
-      }
-    ),
-    {
-      onRetry: (error, meta) => logger.warn("Retrying LINE push flex", {
-        error: error.message,
-        ...meta,
-      }),
-    }
-  );
-}
-
-async function replyText(replyToken, text, quickReply = null) {
-  await replyMessage(replyToken, {
-    type: "text",
-    text,
-    ...(quickReply ? { quickReply } : {}),
-  });
-}
-
-async function replyFlex(replyToken, flexContent) {
-  await replyMessage(replyToken, flexContent);
-}
+const {
+  makeQuickReply,
+  pushMessage,
+  replyMessage,
+  pushFlexMessage,
+  replyText,
+  replyFlex,
+} = createLineService({
+  axios,
+  channelAccessToken: CONFIG.LINE_CHANNEL_ACCESS_TOKEN,
+  logger,
+  withRetry,
+});
 
 // ===== MAIN AI CHAT FLOW =====
 async function handleAIChat(userId, text, replyToken) {
@@ -2188,10 +1895,10 @@ ${context}
 User message:
 ${text}
 
-กรุณาตอบเป็นภาษาไทยในบทบาทอาจารย์นักวิ่ง AI
-ตอบให้เหมาะกับข้อมูลจริงของ user
-ถ้าข้อมูลยังไม่พอ ให้ถามต่อแบบเป็นธรรมชาติ
-อย่าตอบยาวเกินไป
+à¸à¸£à¸¸à¸“à¸²à¸•à¸­à¸šà¹€à¸›à¹‡à¸™à¸ à¸²à¸©à¸²à¹„à¸—à¸¢à¹ƒà¸™à¸šà¸—à¸šà¸²à¸—à¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸™à¸±à¸à¸§à¸´à¹ˆà¸‡ AI
+à¸•à¸­à¸šà¹ƒà¸«à¹‰à¹€à¸«à¸¡à¸²à¸°à¸à¸±à¸šà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸ˆà¸£à¸´à¸‡à¸‚à¸­à¸‡ user
+à¸–à¹‰à¸²à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸žà¸­ à¹ƒà¸«à¹‰à¸–à¸²à¸¡à¸•à¹ˆà¸­à¹à¸šà¸šà¹€à¸›à¹‡à¸™à¸˜à¸£à¸£à¸¡à¸Šà¸²à¸•à¸´
+à¸­à¸¢à¹ˆà¸²à¸•à¸­à¸šà¸¢à¸²à¸§à¹€à¸à¸´à¸™à¹„à¸›
 `;
 
   const answer = await analyzeWithClaudeWithHistory(prompt, history);
@@ -2228,7 +1935,7 @@ async function enforceEventRateLimit(userId, event) {
 
 // ===== WEBHOOK =====
 app.post("/webhook", async (req, res) => {
-  if (!isLineSignatureValid(req)) {
+  if (!isLineSignatureValid(req, CONFIG.LINE_CHANNEL_SECRET)) {
     console.warn("Rejected LINE webhook request with invalid signature");
     return res.sendStatus(401);
   }
@@ -2253,7 +1960,7 @@ app.post("/webhook", async (req, res) => {
       if (event.type === "follow") {
         await pushMessage(
           userId,
-          "🏃 สวัสดีครับ! ยินดีต้อนรับสู่อาจารย์นักวิ่ง AI\n\nส่งรูปผลการวิ่ง, ไฟล์ GPX หรือพิมพ์คุยกับอาจารย์ได้เลยครับ 💪"
+          "ðŸƒ à¸ªà¸§à¸±à¸ªà¸”à¸µà¸„à¸£à¸±à¸š! à¸¢à¸´à¸™à¸”à¸µà¸•à¹‰à¸­à¸™à¸£à¸±à¸šà¸ªà¸¹à¹ˆà¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸™à¸±à¸à¸§à¸´à¹ˆà¸‡ AI\n\nà¸ªà¹ˆà¸‡à¸£à¸¹à¸›à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡, à¹„à¸Ÿà¸¥à¹Œ GPX à¸«à¸£à¸·à¸­à¸žà¸´à¸¡à¸žà¹Œà¸„à¸¸à¸¢à¸à¸±à¸šà¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¹„à¸”à¹‰à¹€à¸¥à¸¢à¸„à¸£à¸±à¸š ðŸ’ª"
         );
 
         await pushFlexMessage(userId, buildUpdateNotificationFlex());
@@ -2268,7 +1975,7 @@ app.post("/webhook", async (req, res) => {
           const latest = activities[0];
 
           if (!latest) {
-            await replyText(event.replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot หรือเชื่อม Strava ก่อนได้เลย");
+            await replyText(event.replyToken, "à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸¥à¹ˆà¸²à¸ªà¸¸à¸”à¸„à¸£à¸±à¸š à¸ªà¹ˆà¸‡ screenshot à¸«à¸£à¸·à¸­à¹€à¸Šà¸·à¹ˆà¸­à¸¡ Strava à¸à¹ˆà¸­à¸™à¹„à¸”à¹‰à¹€à¸¥à¸¢");
             continue;
           }
 
@@ -2277,7 +1984,7 @@ app.post("/webhook", async (req, res) => {
         }
 
         if (data === "action=today_recommendation") {
-          await handleAIChat(userId, "ช่วยแนะนำการซ้อมวันนี้จากสถิติล่าสุดของผม", event.replyToken);
+          await handleAIChat(userId, "à¸Šà¹ˆà¸§à¸¢à¹à¸™à¸°à¸™à¸³à¸à¸²à¸£à¸‹à¹‰à¸­à¸¡à¸§à¸±à¸™à¸™à¸µà¹‰à¸ˆà¸²à¸à¸ªà¸–à¸´à¸•à¸´à¸¥à¹ˆà¸²à¸ªà¸¸à¸”à¸‚à¸­à¸‡à¸œà¸¡", event.replyToken);
           continue;
         }
 
@@ -2286,15 +1993,15 @@ app.post("/webhook", async (req, res) => {
           const stats = calcStatsFromActivities(activities);
 
           if (!stats) {
-            await replyText(event.replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
+            await replyText(event.replyToken, "à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸ªà¸±à¸›à¸”à¸²à¸«à¹Œà¸™à¸µà¹‰à¸„à¸£à¸±à¸š");
             continue;
           }
 
-          await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
+          await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "à¸ªà¸±à¸›à¸”à¸²à¸«à¹Œà¸™à¸µà¹‰"));
           continue;
         }
 
-        await handleAIChat(userId, `User กดเมนู: ${data}`, event.replyToken);
+        await handleAIChat(userId, `User à¸à¸”à¹€à¸¡à¸™à¸¹: ${data}`, event.replyToken);
         continue;
       }
 
@@ -2309,12 +2016,12 @@ app.post("/webhook", async (req, res) => {
             continue;
           }
 
-          if (text === "/today" || text === "สถิติวันนี้") {
+          if (text === "/today" || text === "à¸ªà¸–à¸´à¸•à¸´à¸§à¸±à¸™à¸™à¸µà¹‰") {
             const activities = await getActivitiesForUser(userId, 7);
             const latest = activities[0];
 
             if (!latest) {
-              await replyText(event.replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot ผลการวิ่งมาก่อนได้เลย 📸");
+              await replyText(event.replyToken, "à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸¥à¹ˆà¸²à¸ªà¸¸à¸”à¸„à¸£à¸±à¸š à¸ªà¹ˆà¸‡ screenshot à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸¡à¸²à¸à¹ˆà¸­à¸™à¹„à¸”à¹‰à¹€à¸¥à¸¢ ðŸ“¸");
               continue;
             }
 
@@ -2322,25 +2029,25 @@ app.post("/webhook", async (req, res) => {
             continue;
           }
 
-          if (text === "/summary" || text === "สรุปสัปดาห์") {
+          if (text === "/summary" || text === "à¸ªà¸£à¸¸à¸›à¸ªà¸±à¸›à¸”à¸²à¸«à¹Œ") {
             const activities = await getActivitiesForUser(userId, 7);
             const stats = calcStatsFromActivities(activities);
 
             if (!stats) {
-              await replyText(event.replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
+              await replyText(event.replyToken, "à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸ªà¸±à¸›à¸”à¸²à¸«à¹Œà¸™à¸µà¹‰à¸„à¸£à¸±à¸š");
               continue;
             }
 
-            await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
+            await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "à¸ªà¸±à¸›à¸”à¸²à¸«à¹Œà¸™à¸µà¹‰"));
             continue;
           }
 
-          if (text === "/history" || text === "ประวัติล่าสุด") {
+          if (text === "/history" || text === "à¸›à¸£à¸°à¸§à¸±à¸•à¸´à¸¥à¹ˆà¸²à¸ªà¸¸à¸”") {
             const activities = await getActivitiesForUser(userId, 30);
             const carousel = buildCarouselMessage(activities);
 
             if (!carousel) {
-              await replyText(event.replyToken, "ยังไม่มีประวัติการวิ่งครับ");
+              await replyText(event.replyToken, "à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸›à¸£à¸°à¸§à¸±à¸•à¸´à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸„à¸£à¸±à¸š");
               continue;
             }
 
@@ -2375,7 +2082,7 @@ app.post("/webhook", async (req, res) => {
           const imageBase64 = Buffer.from(imageRes.data).toString("base64");
 
           const analysis = await analyzeWithClaude(
-            "ช่วยอ่านผลการวิ่งจากรูปนี้ ดึง distance, pace, duration, calories, elevation, date แล้ววิเคราะห์เป็นภาษาไทย",
+            "à¸Šà¹ˆà¸§à¸¢à¸­à¹ˆà¸²à¸™à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸ˆà¸²à¸à¸£à¸¹à¸›à¸™à¸µà¹‰ à¸”à¸¶à¸‡ distance, pace, duration, calories, elevation, date à¹à¸¥à¹‰à¸§à¸§à¸´à¹€à¸„à¸£à¸²à¸°à¸«à¹Œà¹€à¸›à¹‡à¸™à¸ à¸²à¸©à¸²à¹„à¸—à¸¢",
             imageBase64
           );
 
@@ -2389,26 +2096,26 @@ app.post("/webhook", async (req, res) => {
 
             const cleanText = analysis.replace(/\{[\s\S]*?\}/, "").trim();
 
-            await saveConversation(userId, "user", "[ส่งรูปผลการวิ่ง]");
+            await saveConversation(userId, "user", "[à¸ªà¹ˆà¸‡à¸£à¸¹à¸›à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡]");
             await saveConversation(userId, "assistant", cleanText);
 
             const replies = [
               {
                 type: "text",
-                text: cleanText || "อาจารย์อ่านผลการวิ่งให้แล้วครับ 💪",
+                text: cleanText || "à¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸­à¹ˆà¸²à¸™à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¹ƒà¸«à¹‰à¹à¸¥à¹‰à¸§à¸„à¸£à¸±à¸š ðŸ’ª",
               },
               buildTodayStatsFlexMessage(activity),
             ];
 
             if (prs) {
-              replies.push(buildPRFlexMessage(prs, activity.name || "ผลการวิ่งล่าสุด"));
+              replies.push(buildPRFlexMessage(prs, activity.name || "à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸¥à¹ˆà¸²à¸ªà¸¸à¸”"));
             }
 
             await replyMessage(event.replyToken, replies);
           } else {
             await replyText(
               event.replyToken,
-              "อาจารย์ยังอ่านค่าสถิติจากรูปนี้ไม่ชัดครับ ลองส่ง screenshot ที่เห็นระยะ/pace/เวลา ชัด ๆ อีกครั้งนะครับ 📸"
+              "à¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸¢à¸±à¸‡à¸­à¹ˆà¸²à¸™à¸„à¹ˆà¸²à¸ªà¸–à¸´à¸•à¸´à¸ˆà¸²à¸à¸£à¸¹à¸›à¸™à¸µà¹‰à¹„à¸¡à¹ˆà¸Šà¸±à¸”à¸„à¸£à¸±à¸š à¸¥à¸­à¸‡à¸ªà¹ˆà¸‡ screenshot à¸—à¸µà¹ˆà¹€à¸«à¹‡à¸™à¸£à¸°à¸¢à¸°/pace/à¹€à¸§à¸¥à¸² à¸Šà¸±à¸” à¹† à¸­à¸µà¸à¸„à¸£à¸±à¹‰à¸‡à¸™à¸°à¸„à¸£à¸±à¸š ðŸ“¸"
             );
           }
 
@@ -2421,7 +2128,7 @@ app.post("/webhook", async (req, res) => {
           if (!fileName.toLowerCase().endsWith(".gpx")) {
             await replyText(
               event.replyToken,
-              "ตอนนี้รองรับไฟล์ .gpx ครับ หรือส่งรูป screenshot ผลการวิ่งก็ได้ 📸"
+              "à¸•à¸­à¸™à¸™à¸µà¹‰à¸£à¸­à¸‡à¸£à¸±à¸šà¹„à¸Ÿà¸¥à¹Œ .gpx à¸„à¸£à¸±à¸š à¸«à¸£à¸·à¸­à¸ªà¹ˆà¸‡à¸£à¸¹à¸› screenshot à¸œà¸¥à¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸à¹‡à¹„à¸”à¹‰ ðŸ“¸"
             );
             continue;
           }
@@ -2448,7 +2155,7 @@ app.post("/webhook", async (req, res) => {
           const gpxData = parseGPX(fileRes.data);
 
           if (!gpxData) {
-            await replyText(event.replyToken, "อ่านไฟล์ GPX ไม่ได้ครับ ลองส่งไฟล์ใหม่อีกครั้งนะครับ");
+            await replyText(event.replyToken, "à¸­à¹ˆà¸²à¸™à¹„à¸Ÿà¸¥à¹Œ GPX à¹„à¸¡à¹ˆà¹„à¸”à¹‰à¸„à¸£à¸±à¸š à¸¥à¸­à¸‡à¸ªà¹ˆà¸‡à¹„à¸Ÿà¸¥à¹Œà¹ƒà¸«à¸¡à¹ˆà¸­à¸µà¸à¸„à¸£à¸±à¹‰à¸‡à¸™à¸°à¸„à¸£à¸±à¸š");
             continue;
           }
 
@@ -2458,16 +2165,16 @@ app.post("/webhook", async (req, res) => {
           const prs = checkPR(userId, gpxData);
 
           const analysis = await analyzeWithClaude(`
-วิเคราะห์การวิ่งนี้:
-ระยะ ${gpxData.distance} km
+à¸§à¸´à¹€à¸„à¸£à¸²à¸°à¸«à¹Œà¸à¸²à¸£à¸§à¸´à¹ˆà¸‡à¸™à¸µà¹‰:
+à¸£à¸°à¸¢à¸° ${gpxData.distance} km
 pace ${paceDecimalToText(gpxData.pace)} /km
-เวลา ${durationMinToText(gpxData.duration)}
+à¹€à¸§à¸¥à¸² ${durationMinToText(gpxData.duration)}
 elevation ${gpxData.elevGain} m
 
-ตอบเป็นภาษาไทยแบบอาจารย์นักวิ่ง AI
+à¸•à¸­à¸šà¹€à¸›à¹‡à¸™à¸ à¸²à¸©à¸²à¹„à¸—à¸¢à¹à¸šà¸šà¸­à¸²à¸ˆà¸²à¸£à¸¢à¹Œà¸™à¸±à¸à¸§à¸´à¹ˆà¸‡ AI
 `);
 
-          await saveConversation(userId, "user", "[ส่งไฟล์ GPX]");
+          await saveConversation(userId, "user", "[à¸ªà¹ˆà¸‡à¹„à¸Ÿà¸¥à¹Œ GPX]");
           await saveConversation(userId, "assistant", analysis);
 
           const replies = [
@@ -2493,7 +2200,7 @@ elevation ${gpxData.elevGain} m
         if (event.replyToken) {
           await replyText(
             event.replyToken,
-            "ขอโทษครับ ระบบมีปัญหาชั่วคราว ลองใหม่อีกครั้งนะครับ"
+            "à¸‚à¸­à¹‚à¸—à¸©à¸„à¸£à¸±à¸š à¸£à¸°à¸šà¸šà¸¡à¸µà¸›à¸±à¸à¸«à¸²à¸Šà¸±à¹ˆà¸§à¸„à¸£à¸²à¸§ à¸¥à¸­à¸‡à¹ƒà¸«à¸¡à¹ˆà¸­à¸µà¸à¸„à¸£à¸±à¹‰à¸‡à¸™à¸°à¸„à¸£à¸±à¸š"
           );
         }
       } catch (_) {}
@@ -2503,7 +2210,7 @@ elevation ${gpxData.elevGain} m
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
-  res.send("AI Running Coach LINE Bot is running ✅");
+  res.send("AI Running Coach LINE Bot is running âœ…");
 });
 
 app.get("/health", (req, res) => {
@@ -2518,11 +2225,11 @@ app.get("/health", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 async function startServer() {
-  validateConfig();
+  validateConfig(CONFIG);
   await initDB();
 
   app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`ðŸš€ Server running on port ${PORT}`);
   });
 }
 
@@ -2530,3 +2237,4 @@ startServer().catch((e) => {
   console.error("Failed to start server:", e);
   process.exit(1);
 });
+
