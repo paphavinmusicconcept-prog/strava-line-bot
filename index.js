@@ -21,7 +21,9 @@ const anthropic = new Anthropic({ apiKey: CONFIG.ANTHROPIC_API_KEY });
 // ===== PostgreSQL DATABASE =====
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: false,
+  ssl: {
+    rejectUnauthorized: false
+  },
 });
 
 async function initDB() {
