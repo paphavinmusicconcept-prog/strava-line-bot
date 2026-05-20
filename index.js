@@ -692,7 +692,7 @@ async function getActivitiesForUser(userId, days = 7) {
 
 // ===== PR CHECKER =====
 function checkPR(userId, activity) {
-  if (!userPRs[userId]) userPRs[userId] = { longestRun: 0, fastestPace: 9999 };
+  if (!userPRs[userId]) userPRs[userId] = { longestRun: 0, fastestPace:null };
 
   const pr = userPRs[userId];
   const prs = [];
@@ -776,7 +776,7 @@ function parseGPX(xmlText) {
       pace: parseFloat(pace.toFixed(4)),
       duration: parseFloat(duration.toFixed(1)),
       elevGain: parseFloat(totalElevGain.toFixed(0)),
-      calories: 0,
+      calories: Math.round(totalDist * 60),
       source: "GPX",
     };
   } catch (e) {
