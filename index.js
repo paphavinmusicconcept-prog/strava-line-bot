@@ -1105,9 +1105,17 @@ function buildTodayStatsFlexMessage(activity = {}) {
             ],
           },
           {
+          type: "separator",
+          margin: "xl",
+          },
+
+          ...buildHRZoneBar(estimateHRZones(activity.pace)),
+
+          {
             type: "separator",
             margin: "xl",
           },
+          
           {
             type: "box",
             layout: "horizontal",
