@@ -1113,7 +1113,7 @@ function buildTodayStatsFlexMessage(activity = {}) {
 
           {
             type: "separator",
-            margin: "xl",
+            margin: "1g",
           },
           
           {
