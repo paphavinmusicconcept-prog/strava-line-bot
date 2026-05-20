@@ -3,6 +3,15 @@ const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
 const crypto = require("crypto");
+const logger = require("./src/logger");
+const { runMigrations } = require("./src/db/migrations");
+const { createActivityRepository } = require("./src/repositories/activityRepository");
+const { assertRateLimit } = require("./src/services/rateLimitService");
+const { withRetry } = require("./src/utils/retry");
+const {
+  createActivityFingerprint,
+  createContentFingerprint,
+} = require("./src/utils/activityFingerprint");
 
 const app = express();
 app.use(express.json({
@@ -147,87 +156,15 @@ const db = new Pool({
   ssl: dbSsl,
 });
 
+const activityRepo = createActivityRepository(db, {
+  estimateCadence,
+  normalizeLookbackDays,
+});
+
 async function initDB() {
   try {
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS activities (
-        id SERIAL PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        date TIMESTAMP NOT NULL,
-        distance FLOAT,
-        pace FLOAT,
-        duration FLOAT,
-        calories FLOAT,
-        elev_gain FLOAT,
-        cadence INT,
-        source TEXT,
-        source_activity_id TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      ALTER TABLE activities
-        ADD COLUMN IF NOT EXISTS source_activity_id TEXT;
-
-      CREATE TABLE IF NOT EXISTS user_challenges (
-        user_id TEXT PRIMARY KEY,
-        goal FLOAT,
-        deadline DATE,
-        start_date DATE,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS user_prs (
-        user_id TEXT PRIMARY KEY,
-        longest_run FLOAT DEFAULT 0,
-        fastest_pace FLOAT DEFAULT 9999,
-        updated_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS strava_tokens (
-        user_id TEXT PRIMARY KEY,
-        access_token TEXT,
-        refresh_token TEXT,
-        expires_at BIGINT,
-        updated_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS conversation_history (
-        id SERIAL PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS user_profile (
-        user_id TEXT PRIMARY KEY,
-        goal TEXT,
-        target_distance FLOAT,
-        target_pace FLOAT,
-        running_level TEXT,
-        injury_note TEXT,
-        available_days TEXT,
-        motivation_style TEXT,
-        updated_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS user_memory (
-        id SERIAL PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        memory_type TEXT,
-        content TEXT NOT NULL,
-        importance INT DEFAULT 1,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_user_memory_user_id ON user_memory(user_id);
-      CREATE INDEX IF NOT EXISTS idx_conversation_history_user_id_created_at ON conversation_history(user_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_activities_user_id_date ON activities(user_id, date DESC);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_unique_source_activity
-        ON activities(user_id, source, source_activity_id)
-        WHERE source_activity_id IS NOT NULL;
-    `);
-    console.log("✅ Database initialized");
+    await runMigrations(db);
+    logger.info("Database initialized");
 
     const tokens = await db.query(`SELECT * FROM strava_tokens`);
     for (const row of tokens.rows) {
@@ -261,7 +198,7 @@ async function initDB() {
     }
 
   } catch (e) {
-    console.error("❌ DB init error:", e.message);
+    logger.error("DB init error", { error: e.message });
     throw e;
   }
 }
@@ -269,62 +206,18 @@ async function initDB() {
 // ===== DB HELPERS =====
 async function dbSaveActivity(userId, activity) {
   try {
-    await db.query(
-      `INSERT INTO activities
-        (user_id, date, distance, pace, duration, calories, elev_gain, cadence, source, source_activity_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (user_id, source, source_activity_id)
-       WHERE source_activity_id IS NOT NULL
-       DO UPDATE SET
-         date = EXCLUDED.date,
-         distance = EXCLUDED.distance,
-         pace = EXCLUDED.pace,
-         duration = EXCLUDED.duration,
-         calories = EXCLUDED.calories,
-         elev_gain = EXCLUDED.elev_gain,
-         cadence = EXCLUDED.cadence`,
-      [
-        userId,
-        activity.date || new Date().toISOString(),
-        activity.distance || 0,
-        activity.pace || 0,
-        activity.duration || 0,
-        activity.calories || 0,
-        activity.elevGain || 0,
-        estimateCadence(activity.pace),
-        activity.source || "manual",
-        activity.sourceActivityId ? String(activity.sourceActivityId) : null,
-      ]
-    );
+    await activityRepo.save(userId, activity);
   } catch (e) {
-    console.error("DB save activity error:", e.message);
+    logger.error("DB save activity error", { error: e.message, userId });
     saveActivity(userId, activity);
   }
 }
 
 async function dbGetActivities(userId, days = 7) {
   try {
-    const safeDays = normalizeLookbackDays(days);
-    const res = await db.query(
-      `SELECT *
-       FROM activities
-       WHERE user_id = $1
-         AND date > NOW() - ($2::int * INTERVAL '1 day')
-       ORDER BY date DESC`,
-      [userId, safeDays]
-    );
-    return res.rows.map(r => ({
-      date: r.date,
-      distance: parseFloat(r.distance),
-      pace: parseFloat(r.pace),
-      duration: parseFloat(r.duration),
-      calories: parseFloat(r.calories),
-      elevGain: parseFloat(r.elev_gain),
-      source: r.source,
-      sourceActivityId: r.source_activity_id,
-    }));
+    return await activityRepo.findRecent(userId, days);
   } catch (e) {
-    console.error("DB get activities error:", e.message);
+    logger.error("DB get activities error", { error: e.message, userId, days });
     return getRecentActivities(userId, days);
   }
 }
@@ -518,6 +411,18 @@ async function dbSaveUserMemory(userId, memory) {
         String(memory.content).slice(0, 1000),
         memory.importance || 1,
       ]
+    );
+
+    await db.query(
+      `DELETE FROM user_memory
+       WHERE user_id = $1
+       AND id NOT IN (
+         SELECT id FROM user_memory
+         WHERE user_id = $1
+         ORDER BY importance DESC, created_at DESC
+         LIMIT 100
+       )`,
+      [userId]
     );
   } catch (e) {
     console.error("dbSaveUserMemory error:", e.message);
@@ -752,15 +657,23 @@ async function refreshStravaToken(lineUserId) {
   }
 
   try {
-    const res = await axios.post(
-      "https://www.strava.com/oauth/token",
+    const res = await withRetry(
+      () => axios.post(
+        "https://www.strava.com/oauth/token",
+        {
+          client_id: CONFIG.STRAVA_CLIENT_ID,
+          client_secret: CONFIG.STRAVA_CLIENT_SECRET,
+          grant_type: "refresh_token",
+          refresh_token: tokenData.refresh_token,
+        },
+        { timeout: 10000 }
+      ),
       {
-        client_id: CONFIG.STRAVA_CLIENT_ID,
-        client_secret: CONFIG.STRAVA_CLIENT_SECRET,
-        grant_type: "refresh_token",
-        refresh_token: tokenData.refresh_token,
-      },
-      { timeout: 10000 }
+        onRetry: (error, meta) => logger.warn("Retrying Strava token refresh", {
+          error: error.message,
+          ...meta,
+        }),
+      }
     );
 
     const newTokenData = {
@@ -794,11 +707,19 @@ async function getStravaActivities(lineUserId, days = 7) {
   try {
     const after = Math.floor((Date.now() - safeDays * 86400000) / 1000);
 
-    const res = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { after, per_page: 50 },
-      timeout: 10000,
-    });
+    const res = await withRetry(
+      () => axios.get("https://www.strava.com/api/v3/athlete/activities", {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { after, per_page: 50 },
+        timeout: 10000,
+      }),
+      {
+        onRetry: (error, meta) => logger.warn("Retrying Strava activities fetch", {
+          error: error.message,
+          ...meta,
+        }),
+      }
+    );
 
     stravaCache[cacheKey] = { data: res.data, timestamp: Date.now() };
     return res.data;
@@ -996,6 +917,7 @@ function parseGPX(xmlText) {
       elevGain: parseFloat(totalElevGain.toFixed(0)),
       calories: Math.round(totalDist * 60),
       source: "GPX",
+      sourceActivityId: createContentFingerprint("gpx", xmlText),
     };
   } catch (e) {
     console.error("GPX parse error:", e.message);
@@ -1014,7 +936,7 @@ async function analyzeWithClaudeWithHistory(prompt, history = []) {
       { role: "user", content: prompt },
     ];
 
-    const res = await anthropic.messages.create({
+    const res = await withRetry(() => anthropic.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 1500,
       system: `คุณคืออาจารย์นักวิ่ง AI ผู้ชายที่มีประสบการณ์สูง ผ่านการแข่งมาราธอนและอัลตร้ามาราธอนมาแล้วนับไม่ถ้วน
@@ -1029,6 +951,11 @@ async function analyzeWithClaudeWithHistory(prompt, history = []) {
 - ใช้ข้อมูล user context ให้มากที่สุด
 - ถ้าข้อมูลไม่พอ ให้ถามต่อแบบธรรมชาติ`,
       messages,
+    }), {
+      onRetry: (error, meta) => logger.warn("Retrying Claude request with history", {
+        error: error.message,
+        ...meta,
+      }),
     });
 
     return res.content?.[0]?.text || "ขอโทษครับ อาจารย์ยังตอบไม่ได้ตอนนี้";
@@ -1064,7 +991,7 @@ async function analyzeWithClaude(prompt, imageBase64 = null) {
       });
     }
 
-    const res = await anthropic.messages.create({
+    const res = await withRetry(() => anthropic.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 1500,
       system: `คุณคืออาจารย์นักวิ่ง AI ผู้ชายที่มีประสบการณ์สูง มีความรู้ลึกด้านการวิ่ง โภชนาการ และการฝึกซ้อม
@@ -1081,6 +1008,11 @@ async function analyzeWithClaude(prompt, imageBase64 = null) {
 
 pace เป็นตัวเลขทศนิยม เช่น 5:30/km = 5.5`,
       messages,
+    }), {
+      onRetry: (error, meta) => logger.warn("Retrying Claude request", {
+        error: error.message,
+        ...meta,
+      }),
     });
 
     return res.content?.[0]?.text || "";
@@ -1098,7 +1030,7 @@ function extractActivityFromResponse(text) {
     const data = JSON.parse(jsonMatch[0]);
     if (!data.distance) return null;
 
-    return {
+    const activity = {
       date: data.date || new Date().toISOString(),
       distance: parseFloat(data.distance) || 0,
       pace: parseFloat(data.pace) || 0,
@@ -1107,6 +1039,8 @@ function extractActivityFromResponse(text) {
       elevGain: parseFloat(data.elevGain) || 0,
       source: "Screenshot",
     };
+    activity.sourceActivityId = createActivityFingerprint(activity);
+    return activity;
   } catch (e) {
     return null;
   }
@@ -2147,55 +2081,79 @@ function makeQuickReply(items) {
 }
 
 async function pushMessage(userId, text, quickReply = null) {
-  await axios.post(
-    "https://api.line.me/v2/bot/message/push",
-    {
-      to: userId,
-      messages: [
-        {
-          type: "text",
-          text,
-          ...(quickReply ? { quickReply } : {}),
-        },
-      ],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+  await withRetry(
+    () => axios.post(
+      "https://api.line.me/v2/bot/message/push",
+      {
+        to: userId,
+        messages: [
+          {
+            type: "text",
+            text,
+            ...(quickReply ? { quickReply } : {}),
+          },
+        ],
       },
-      timeout: 10000,
+      {
+        headers: {
+          Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+        },
+        timeout: 10000,
+      }
+    ),
+    {
+      onRetry: (error, meta) => logger.warn("Retrying LINE push message", {
+        error: error.message,
+        ...meta,
+      }),
     }
   );
 }
 
 async function replyMessage(replyToken, messages) {
-  await axios.post(
-    "https://api.line.me/v2/bot/message/reply",
-    {
-      replyToken,
-      messages: Array.isArray(messages) ? messages : [messages],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+  await withRetry(
+    () => axios.post(
+      "https://api.line.me/v2/bot/message/reply",
+      {
+        replyToken,
+        messages: Array.isArray(messages) ? messages : [messages],
       },
-      timeout: 10000,
+      {
+        headers: {
+          Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+        },
+        timeout: 10000,
+      }
+    ),
+    {
+      onRetry: (error, meta) => logger.warn("Retrying LINE reply message", {
+        error: error.message,
+        ...meta,
+      }),
     }
   );
 }
 
 async function pushFlexMessage(userId, flexContent) {
-  await axios.post(
-    "https://api.line.me/v2/bot/message/push",
-    {
-      to: userId,
-      messages: [flexContent],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+  await withRetry(
+    () => axios.post(
+      "https://api.line.me/v2/bot/message/push",
+      {
+        to: userId,
+        messages: [flexContent],
       },
-      timeout: 10000,
+      {
+        headers: {
+          Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+        },
+        timeout: 10000,
+      }
+    ),
+    {
+      onRetry: (error, meta) => logger.warn("Retrying LINE push flex", {
+        error: error.message,
+        ...meta,
+      }),
     }
   );
 }
@@ -2214,6 +2172,12 @@ async function replyFlex(replyToken, flexContent) {
 
 // ===== MAIN AI CHAT FLOW =====
 async function handleAIChat(userId, text, replyToken) {
+  const aiLimit = await assertRateLimit(db, userId, "ai");
+  if (!aiLimit.allowed) {
+    await replyText(replyToken, aiLimit.message);
+    return;
+  }
+
   await saveConversation(userId, "user", text);
 
   const { context, history } = await loadUserContext(userId);
@@ -2239,6 +2203,29 @@ ${text}
   await replyText(replyToken, answer);
 }
 
+async function enforceEventRateLimit(userId, event) {
+  if (event.type === "follow") return true;
+
+  const messageType = event.message?.type;
+  const action = messageType === "image" || messageType === "file" ? "media" : "message";
+  const limit = await assertRateLimit(db, userId, action);
+
+  if (limit.allowed) return true;
+
+  logger.warn("Rate limit exceeded", {
+    userId,
+    eventType: event.type,
+    messageType,
+    reason: limit.reason,
+  });
+
+  if (event.replyToken) {
+    await replyText(event.replyToken, limit.message);
+  }
+
+  return false;
+}
+
 // ===== WEBHOOK =====
 app.post("/webhook", async (req, res) => {
   if (!isLineSignatureValid(req)) {
@@ -2259,6 +2246,10 @@ app.post("/webhook", async (req, res) => {
     if (!userId) continue;
 
     try {
+      if (!(await enforceEventRateLimit(userId, event))) {
+        continue;
+      }
+
       if (event.type === "follow") {
         await pushMessage(
           userId,
@@ -2362,14 +2353,22 @@ app.post("/webhook", async (req, res) => {
         }
 
         if (message.type === "image") {
-          const imageRes = await axios.get(
-            `https://api-data.line.me/v2/bot/message/${message.id}/content`,
+          const imageRes = await withRetry(
+            () => axios.get(
+              `https://api-data.line.me/v2/bot/message/${message.id}/content`,
+              {
+                headers: {
+                  Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+                },
+                responseType: "arraybuffer",
+                timeout: 10000,
+              }
+            ),
             {
-              headers: {
-                Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
-              },
-              responseType: "arraybuffer",
-              timeout: 10000,
+              onRetry: (error, meta) => logger.warn("Retrying LINE image download", {
+                error: error.message,
+                ...meta,
+              }),
             }
           );
 
@@ -2427,14 +2426,22 @@ app.post("/webhook", async (req, res) => {
             continue;
           }
 
-          const fileRes = await axios.get(
-            `https://api-data.line.me/v2/bot/message/${message.id}/content`,
+          const fileRes = await withRetry(
+            () => axios.get(
+              `https://api-data.line.me/v2/bot/message/${message.id}/content`,
+              {
+                headers: {
+                  Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+                },
+                responseType: "text",
+                timeout: 10000,
+              }
+            ),
             {
-              headers: {
-                Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
-              },
-              responseType: "text",
-              timeout: 10000,
+              onRetry: (error, meta) => logger.warn("Retrying LINE file download", {
+                error: error.message,
+                ...meta,
+              }),
             }
           );
 
