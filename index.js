@@ -692,26 +692,43 @@ async function getActivitiesForUser(userId, days = 7) {
 
 // ===== PR CHECKER =====
 function checkPR(userId, activity) {
-  if (!userPRs[userId]) userPRs[userId] = { longestRun: 0, fastestPace:null };
+  if (!userPRs[userId]) {
+    userPRs[userId] = { longestRun: 0, fastestPace: null };
+  }
 
   const pr = userPRs[userId];
   const prs = [];
 
   if (activity.distance && activity.distance > pr.longestRun) {
-    prs.push(`🏅 PR ระยะทาง! ${activity.distance.toFixed(2)}km (เดิม ${pr.longestRun.toFixed(2)}km)`);
+    if (pr.longestRun && pr.longestRun > 0) {
+      prs.push(`🏅 PR ระยะทาง! ${activity.distance.toFixed(2)}km (เดิม ${pr.longestRun.toFixed(2)}km)`);
+    } else {
+      prs.push(`🏅 PR ระยะทางครั้งแรก! ${activity.distance.toFixed(2)}km`);
+    }
+
     pr.longestRun = activity.distance;
   }
 
-  if (activity.pace && activity.pace > 0 && activity.pace < pr.fastestPace) {
+  if (
+    activity.pace &&
+    activity.pace > 0 &&
+    (!pr.fastestPace || activity.pace < pr.fastestPace)
+  ) {
     const pMin = Math.floor(activity.pace);
     const pSec = Math.round((activity.pace - pMin) * 60);
 
-    const oldMin = Math.floor(pr.fastestPace);
-    const oldSec = Math.round((pr.fastestPace - oldMin) * 60);
+    if (pr.fastestPace && pr.fastestPace > 0 && pr.fastestPace < 9999) {
+      const oldMin = Math.floor(pr.fastestPace);
+      const oldSec = Math.round((pr.fastestPace - oldMin) * 60);
 
-    prs.push(
-      `⚡ PR Pace! ${pMin}:${String(pSec).padStart(2, "0")}/km (เดิม ${oldMin}:${String(oldSec).padStart(2, "0")}/km)`
-    );
+      prs.push(
+        `⚡ PR Pace! ${pMin}:${String(pSec).padStart(2, "0")}/km (เดิม ${oldMin}:${String(oldSec).padStart(2, "0")}/km)`
+      );
+    } else {
+      prs.push(
+        `⚡ PR Pace ครั้งแรก! ${pMin}:${String(pSec).padStart(2, "0")}/km`
+      );
+    }
 
     pr.fastestPace = activity.pace;
   }
@@ -720,7 +737,6 @@ function checkPR(userId, activity) {
 
   return prs.length > 0 ? prs : null;
 }
-
 // ===== GPX PARSER =====
 function parseGPX(xmlText) {
   try {
@@ -1000,7 +1016,10 @@ function buildTodayStatsFlexMessage(activity = {}) {
   const distance = activity.distance || 0;
   const pace = activity.paceText || paceDecimalToText(activity.pace);
   const duration = activity.durationText || durationMinToText(activity.duration);
-  const calories = activity.calories || 0;
+  const calories =
+  activity.calories && activity.calories > 0
+    ? Math.round(activity.calories)
+    : Math.round((activity.distance || 0) * 60);
   const cadence = activity.cadence || estimateCadence(activity.pace);
   const elevGain = activity.elevGain || 0;
 
