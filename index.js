@@ -12,15 +12,15 @@ const CONFIG = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   STRAVA_CLIENT_ID: process.env.STRAVA_CLIENT_ID,
   STRAVA_CLIENT_SECRET: process.env.STRAVA_CLIENT_SECRET,
-  RAPIDAPI_KEY: process.env.RAPIDAPI_KEY || "054178c360msh11b2a814097d9e9p1eb967jsn28a2218f2488",
-  SERVER_URL: "https://strava-line-bot-production.up.railway.app",
+  RAPIDAPI_KEY: process.env.RAPIDAPI_KEY,
+  SERVER_URL: process.env.SERVER_URL || "https://strava-line-bot-production.up.railway.app",
 };
 
 const anthropic = new Anthropic({ apiKey: CONFIG.ANTHROPIC_API_KEY });
 
 // ===== PostgreSQL DATABASE =====
 const db = new Pool({
-  connectionString: process.env.DATABASE_URL || "postgresql://postgres:lfIXdoZJbKsskzAphIwYIFOHKEmiClrX@postgres.railway.internal:5432/railway",
+  connectionString: process.env.DATABASE_URL,
   ssl: false,
 });
 
@@ -63,8 +63,67 @@ async function initDB() {
         expires_at BIGINT,
         updated_at TIMESTAMP DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS conversation_history (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS user_profile (
+        user_id TEXT PRIMARY KEY,
+        goal TEXT,
+        target_distance FLOAT,
+        target_pace FLOAT,
+        running_level TEXT,
+        injury_note TEXT,
+        available_days TEXT,
+        motivation_style TEXT,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS user_memory (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        memory_type TEXT,
+        content TEXT NOT NULL,
+        importance INT DEFAULT 1,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_user_memory_user_id ON user_memory(user_id);
+      CREATE INDEX IF NOT EXISTS idx_conversation_history_user_id_created_at ON conversation_history(user_id, created_at DESC);
     `);
     console.log("✅ Database initialized");
+
+    const tokens = await db.query(`SELECT * FROM strava_tokens`);
+    for (const row of tokens.rows) {
+      stravaTokens[row.user_id] = {
+        access_token: row.access_token,
+        refresh_token: row.refresh_token,
+        expires_at: parseInt(row.expires_at),
+      };
+    }
+
+    const prs = await db.query(`SELECT * FROM user_prs`);
+    for (const row of prs.rows) {
+      userPRs[row.user_id] = {
+        longestRun: parseFloat(row.longest_run),
+        fastestPace: parseFloat(row.fastest_pace),
+      };
+    }
+
+    const challenges = await db.query(`SELECT * FROM user_challenges`);
+    for (const row of challenges.rows) {
+      userChallenges[row.user_id] = {
+        goal: parseFloat(row.goal),
+        deadline: row.deadline,
+        startDate: row.start_date,
+      };
+    }
+
   } catch (e) {
     console.error("❌ DB init error:", e.message);
   }
@@ -92,8 +151,7 @@ async function dbSaveActivity(userId, activity) {
     );
   } catch (e) {
     console.error("DB save activity error:", e.message);
-    // fallback to memory
-    await dbSaveActivity(userId, activity);
+    saveActivity(userId, activity);
   }
 }
 
@@ -114,7 +172,7 @@ async function dbGetActivities(userId, days = 7) {
     }));
   } catch (e) {
     console.error("DB get activities error:", e.message);
-    return getRecentActivities(userId, days); // fallback to memory
+    return getRecentActivities(userId, days);
   }
 }
 
@@ -160,7 +218,10 @@ async function dbGetPR(userId) {
   try {
     const res = await db.query(`SELECT * FROM user_prs WHERE user_id = $1`, [userId]);
     if (res.rows.length === 0) return null;
-    return { longestRun: parseFloat(res.rows[0].longest_run), fastestPace: parseFloat(res.rows[0].fastest_pace) };
+    return {
+      longestRun: parseFloat(res.rows[0].longest_run),
+      fastestPace: parseFloat(res.rows[0].fastest_pace),
+    };
   } catch (e) {
     return userPRs[userId] || null;
   }
@@ -174,10 +235,10 @@ async function dbSaveStravaToken(userId, tokenData) {
        ON CONFLICT (user_id) DO UPDATE SET access_token=$2, refresh_token=$3, expires_at=$4, updated_at=NOW()`,
       [userId, tokenData.access_token, tokenData.refresh_token, tokenData.expires_at]
     );
-    stravaTokens[userId] = tokenData; // sync to memory
+    stravaTokens[userId] = tokenData;
   } catch (e) {
     console.error("DB save strava token error:", e.message);
-    stravaTokens[userId] = tokenData; // fallback to memory
+    stravaTokens[userId] = tokenData;
   }
 }
 
@@ -186,18 +247,285 @@ async function dbGetStravaToken(userId) {
     const res = await db.query(`SELECT * FROM strava_tokens WHERE user_id = $1`, [userId]);
     if (res.rows.length === 0) return null;
     const r = res.rows[0];
-    return { access_token: r.access_token, refresh_token: r.refresh_token, expires_at: parseInt(r.expires_at) };
+    return {
+      access_token: r.access_token,
+      refresh_token: r.refresh_token,
+      expires_at: parseInt(r.expires_at),
+    };
   } catch (e) {
     return stravaTokens[userId] || null;
+  }
+}
+
+// ===== AI MEMORY / CONTEXT HELPERS =====
+async function saveConversation(userId, role, content) {
+  if (!userId || !content) return;
+
+  try {
+    await db.query(
+      `INSERT INTO conversation_history (user_id, role, content)
+       VALUES ($1, $2, $3)`,
+      [userId, role, String(content).slice(0, 8000)]
+    );
+
+    await db.query(
+      `DELETE FROM conversation_history
+       WHERE user_id = $1
+       AND id NOT IN (
+         SELECT id FROM conversation_history
+         WHERE user_id = $1
+         ORDER BY created_at DESC
+         LIMIT 50
+       )`,
+      [userId]
+    );
+  } catch (e) {
+    console.error("saveConversation error:", e.message);
+  }
+}
+
+async function getConversationHistory(userId, limit = 12) {
+  try {
+    const res = await db.query(
+      `SELECT role, content
+       FROM conversation_history
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    return res.rows.reverse().map(h => ({
+      role: h.role === "assistant" ? "assistant" : "user",
+      content: h.content,
+    }));
+  } catch (e) {
+    console.error("getConversationHistory error:", e.message);
+    return [];
+  }
+}
+
+async function dbSaveUserProfile(userId, profile = {}) {
+  try {
+    await db.query(
+      `INSERT INTO user_profile
+       (user_id, goal, target_distance, target_pace, running_level, injury_note, available_days, motivation_style)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (user_id) DO UPDATE SET
+         goal = COALESCE($2, user_profile.goal),
+         target_distance = COALESCE($3, user_profile.target_distance),
+         target_pace = COALESCE($4, user_profile.target_pace),
+         running_level = COALESCE($5, user_profile.running_level),
+         injury_note = COALESCE($6, user_profile.injury_note),
+         available_days = COALESCE($7, user_profile.available_days),
+         motivation_style = COALESCE($8, user_profile.motivation_style),
+         updated_at = NOW()`,
+      [
+        userId,
+        profile.goal || null,
+        profile.target_distance || null,
+        profile.target_pace || null,
+        profile.running_level || null,
+        profile.injury_note || null,
+        profile.available_days || null,
+        profile.motivation_style || null,
+      ]
+    );
+  } catch (e) {
+    console.error("dbSaveUserProfile error:", e.message);
+  }
+}
+
+async function dbGetUserProfile(userId) {
+  try {
+    const res = await db.query(
+      `SELECT *
+       FROM user_profile
+       WHERE user_id = $1`,
+      [userId]
+    );
+    return res.rows[0] || null;
+  } catch (e) {
+    console.error("dbGetUserProfile error:", e.message);
+    return null;
+  }
+}
+
+async function dbSaveUserMemory(userId, memory) {
+  if (!memory || !memory.content) return;
+
+  try {
+    await db.query(
+      `INSERT INTO user_memory (user_id, memory_type, content, importance)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        userId,
+        memory.memory_type || "note",
+        String(memory.content).slice(0, 1000),
+        memory.importance || 1,
+      ]
+    );
+  } catch (e) {
+    console.error("dbSaveUserMemory error:", e.message);
+  }
+}
+
+async function dbGetUserMemories(userId, limit = 20) {
+  try {
+    const res = await db.query(
+      `SELECT memory_type, content, importance, created_at
+       FROM user_memory
+       WHERE user_id = $1
+       ORDER BY importance DESC, created_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+    return res.rows || [];
+  } catch (e) {
+    console.error("dbGetUserMemories error:", e.message);
+    return [];
+  }
+}
+
+async function loadUserContext(userId) {
+  const [
+    recent7,
+    recent30,
+    challenge,
+    pr,
+    profile,
+    memories,
+    history,
+  ] = await Promise.all([
+    dbGetActivities(userId, 7),
+    dbGetActivities(userId, 30),
+    dbGetChallenge(userId),
+    dbGetPR(userId),
+    dbGetUserProfile(userId),
+    dbGetUserMemories(userId, 20),
+    getConversationHistory(userId, 12),
+  ]);
+
+  const stats7 = calcStatsFromActivities(recent7);
+  const stats30 = calcStatsFromActivities(recent30);
+
+  let context = `=== USER CONTEXT ===\n`;
+
+  if (profile) {
+    context += `\n=== PROFILE ===\n`;
+    context += `Goal: ${profile.goal || "-"}\n`;
+    context += `Target Distance: ${profile.target_distance || "-"} km\n`;
+    context += `Target Pace: ${profile.target_pace || "-"} /km\n`;
+    context += `Running Level: ${profile.running_level || "-"}\n`;
+    context += `Injury Note: ${profile.injury_note || "-"}\n`;
+    context += `Available Days: ${profile.available_days || "-"}\n`;
+    context += `Motivation Style: ${profile.motivation_style || "-"}\n`;
+  }
+
+  if (memories.length > 0) {
+    context += `\n=== IMPORTANT MEMORIES ===\n`;
+    for (const m of memories) {
+      context += `- [${m.memory_type}] ${m.content}\n`;
+    }
+  }
+
+  if (stats7) {
+    context += `\n=== LAST 7 DAYS ===\n`;
+    context += `Runs: ${stats7.count}\n`;
+    context += `Distance: ${stats7.totalDistance.toFixed(2)} km\n`;
+    context += `Calories: ${stats7.totalCalories.toFixed(0)} kcal\n`;
+    context += `Avg Pace: ${stats7.avgPaceMin}:${String(stats7.avgPaceSec).padStart(2, "0")} /km\n`;
+  }
+
+  if (stats30) {
+    context += `\n=== LAST 30 DAYS ===\n`;
+    context += `Runs: ${stats30.count}\n`;
+    context += `Distance: ${stats30.totalDistance.toFixed(2)} km\n`;
+    context += `Calories: ${stats30.totalCalories.toFixed(0)} kcal\n`;
+  }
+
+  if (challenge) {
+    context += `\n=== CURRENT CHALLENGE ===\n`;
+    context += `Goal: ${challenge.goal} km\n`;
+    context += `Deadline: ${challenge.deadline}\n`;
+    context += `Start Date: ${challenge.startDate}\n`;
+  }
+
+  if (pr) {
+    context += `\n=== PERSONAL RECORD ===\n`;
+    context += `Longest Run: ${pr.longestRun} km\n`;
+    context += `Fastest Pace: ${pr.fastestPace} /km\n`;
+  }
+
+  return { context, history, profile, memories, recent7, recent30, challenge, pr };
+}
+
+async function extractMemoryFromChat(userId, userText, assistantText) {
+  try {
+    const prompt = `
+อ่านข้อความต่อไปนี้ แล้วดึงข้อมูลระยะยาวที่ควรจำเกี่ยวกับนักวิ่งคนนี้
+
+User:
+${userText}
+
+Assistant:
+${assistantText}
+
+ให้ตอบเป็น JSON เท่านั้น ห้ามมีคำอธิบายอื่น
+
+Schema:
+{
+  "profile": {
+    "goal": null,
+    "target_distance": null,
+    "target_pace": null,
+    "running_level": null,
+    "injury_note": null,
+    "available_days": null,
+    "motivation_style": null
+  },
+  "memories": [
+    {
+      "memory_type": "goal|injury|preference|schedule|motivation|note",
+      "content": "ข้อความที่ควรจำ",
+      "importance": 1
+    }
+  ]
+}
+
+กติกา:
+- เก็บเฉพาะข้อมูลที่น่าจะใช้ได้นาน
+- อย่าเก็บข้อความทั่วไป
+- ถ้าไม่มีข้อมูลใหม่ ให้ profile ทุกช่องเป็น null และ memories เป็น []
+`;
+
+    const raw = await analyzeWithClaude(prompt);
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return;
+
+    const data = JSON.parse(jsonMatch[0]);
+
+    if (data.profile) {
+      await dbSaveUserProfile(userId, data.profile);
+    }
+
+    if (Array.isArray(data.memories)) {
+      for (const m of data.memories) {
+        if (!m || !m.content) continue;
+        await dbSaveUserMemory(userId, m);
+      }
+    }
+  } catch (e) {
+    console.error("extractMemoryFromChat error:", e.message);
   }
 }
 
 // ===== DATA STORE =====
 const userSessions = {};
 const userChallenges = {};
-const userActivities = {}; // เก็บ stat จากรูป/GPX
+const userActivities = {};
 const userPRs = {};
-const stravaTokens = {}; // เก็บ Strava token ของ user ที่เชื่อมไว้
+const stravaTokens = {};
 
 // ===== HELPERS =====
 function hasStrava(userId) {
@@ -218,20 +546,56 @@ function getRecentActivities(userId, days = 7) {
 
 function calcStatsFromActivities(activities) {
   if (!activities || activities.length === 0) return null;
+
   const totalDistance = activities.reduce((s, a) => s + (a.distance || 0), 0);
   const totalCalories = activities.reduce((s, a) => s + (a.calories || 0), 0);
   const paces = activities.filter(a => a.pace).map(a => a.pace);
-  const avgPaceDecimal = paces.length > 0 ? paces.reduce((s, p) => s + p, 0) / paces.length : 0;
+
+  const avgPaceDecimal =
+    paces.length > 0 ? paces.reduce((s, p) => s + p, 0) / paces.length : 0;
+
   const avgPaceMin = Math.floor(avgPaceDecimal);
   const avgPaceSec = Math.round((avgPaceDecimal - avgPaceMin) * 60);
-  return { count: activities.length, totalDistance, totalCalories, avgPaceMin, avgPaceSec, activities };
+
+  return {
+    count: activities.length,
+    totalDistance,
+    totalCalories,
+    avgPaceMin,
+    avgPaceSec,
+    activities,
+  };
+}
+
+function paceDecimalToText(pace) {
+  if (!pace || pace <= 0) return "-";
+  const min = Math.floor(pace);
+  const sec = Math.round((pace - min) * 60);
+  return `${min}:${String(sec).padStart(2, "0")}`;
+}
+
+function durationMinToText(duration) {
+  if (!duration || duration <= 0) return "-";
+  const totalSeconds = Math.round(duration * 60);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 // ===== STRAVA HELPERS =====
 async function refreshStravaToken(lineUserId) {
-  const tokenData = stravaTokens[lineUserId];
+  const tokenData = await dbGetStravaToken(lineUserId);
   if (!tokenData) return null;
-  if (tokenData.expires_at > Date.now() / 1000 + 60) return tokenData.access_token;
+
+  if (tokenData.expires_at > Date.now() / 1000 + 60) {
+    return tokenData.access_token;
+  }
+
   try {
     const res = await axios.post("https://www.strava.com/oauth/token", {
       client_id: CONFIG.STRAVA_CLIENT_ID,
@@ -239,11 +603,14 @@ async function refreshStravaToken(lineUserId) {
       grant_type: "refresh_token",
       refresh_token: tokenData.refresh_token,
     });
-    stravaTokens[lineUserId] = {
+
+    const newTokenData = {
       access_token: res.data.access_token,
       refresh_token: res.data.refresh_token,
       expires_at: res.data.expires_at,
     };
+
+    await dbSaveStravaToken(lineUserId, newTokenData);
     return res.data.access_token;
   } catch (e) {
     console.error("Strava refresh error:", e.message);
@@ -251,15 +618,34 @@ async function refreshStravaToken(lineUserId) {
   }
 }
 
+const stravaCache = {};
+
 async function getStravaActivities(lineUserId, days = 7) {
+  const cacheKey = `${lineUserId}_${days}`;
+  const cached = stravaCache[cacheKey];
+
+  if (cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
+    return cached.data;
+  }
+
   const token = await refreshStravaToken(lineUserId);
   if (!token) return null;
-  const after = Math.floor((Date.now() - days * 86400000) / 1000);
-  const res = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
-    headers: { Authorization: `Bearer ${token}` },
-    params: { after, per_page: 50 },
-  });
-  return res.data;
+
+  try {
+    const after = Math.floor((Date.now() - days * 86400000) / 1000);
+
+    const res = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { after, per_page: 50 },
+      timeout: 10000,
+    });
+
+    stravaCache[cacheKey] = { data: res.data, timestamp: Date.now() };
+    return res.data;
+  } catch (e) {
+    console.error("Strava activities error:", e.message);
+    return null;
+  }
 }
 
 function convertStravaToActivities(stravaData) {
@@ -267,7 +653,8 @@ function convertStravaToActivities(stravaData) {
     .filter(a => a.type === "Run")
     .map(a => {
       const dist = a.distance / 1000;
-      const pace = (a.moving_time / 60) / dist;
+      const pace = dist > 0 ? (a.moving_time / 60) / dist : 0;
+
       return {
         date: a.start_date_local,
         distance: parseFloat(dist.toFixed(2)),
@@ -284,38 +671,52 @@ function convertStravaToActivities(stravaData) {
 async function getActivitiesForUser(userId, days = 7) {
   if (hasStrava(userId)) {
     const stravaData = await getStravaActivities(userId, days);
+
     if (stravaData) {
       const converted = convertStravaToActivities(stravaData);
-      // บันทึกลง DB ด้วย
+
       for (const a of converted) {
         await dbSaveActivity(userId, a);
       }
+
       return converted;
     }
   }
-  // ดึงจาก DB ก่อน ถ้าไม่มีค่อย fallback memory
+
   const dbActivities = await dbGetActivities(userId, days);
   if (dbActivities.length > 0) return dbActivities;
+
   return getRecentActivities(userId, days);
 }
 
 // ===== PR CHECKER =====
 function checkPR(userId, activity) {
   if (!userPRs[userId]) userPRs[userId] = { longestRun: 0, fastestPace: 9999 };
+
   const pr = userPRs[userId];
   const prs = [];
+
   if (activity.distance && activity.distance > pr.longestRun) {
     prs.push(`🏅 PR ระยะทาง! ${activity.distance.toFixed(2)}km (เดิม ${pr.longestRun.toFixed(2)}km)`);
     pr.longestRun = activity.distance;
   }
+
   if (activity.pace && activity.pace > 0 && activity.pace < pr.fastestPace) {
     const pMin = Math.floor(activity.pace);
     const pSec = Math.round((activity.pace - pMin) * 60);
+
     const oldMin = Math.floor(pr.fastestPace);
     const oldSec = Math.round((pr.fastestPace - oldMin) * 60);
-    prs.push(`⚡ PR Pace! ${pMin}:${String(pSec).padStart(2,"0")}/km (เดิม ${oldMin}:${String(oldSec).padStart(2,"0")}/km)`);
+
+    prs.push(
+      `⚡ PR Pace! ${pMin}:${String(pSec).padStart(2, "0")}/km (เดิม ${oldMin}:${String(oldSec).padStart(2, "0")}/km)`
+    );
+
     pr.fastestPace = activity.pace;
   }
+
+  dbSavePR(userId, pr);
+
   return prs.length > 0 ? prs : null;
 }
 
@@ -323,24 +724,51 @@ function checkPR(userId, activity) {
 function parseGPX(xmlText) {
   try {
     const points = [];
-    const trkptRegex = /<trkpt lat="([\d.-]+)" lon="([\d.-]+)"[^>]*>[\s\S]*?<ele>([\d.]+)<\/ele>[\s\S]*?<time>([^<]+)<\/time>/g;
+    const trkptRegex =
+      /<trkpt lat="([\d.-]+)" lon="([\d.-]+)"[^>]*>[\s\S]*?<ele>([\d.]+)<\/ele>[\s\S]*?<time>([^<]+)<\/time>/g;
+
     let match;
+
     while ((match = trkptRegex.exec(xmlText)) !== null) {
-      points.push({ lat: parseFloat(match[1]), lon: parseFloat(match[2]), ele: parseFloat(match[3]), time: new Date(match[4]) });
+      points.push({
+        lat: parseFloat(match[1]),
+        lon: parseFloat(match[2]),
+        ele: parseFloat(match[3]),
+        time: new Date(match[4]),
+      });
     }
+
     if (points.length < 2) return null;
-    let totalDist = 0, totalElevGain = 0;
+
+    let totalDist = 0;
+    let totalElevGain = 0;
+
     for (let i = 1; i < points.length; i++) {
-      const p1 = points[i-1], p2 = points[i];
+      const p1 = points[i - 1];
+      const p2 = points[i];
+
       const R = 6371;
       const dLat = (p2.lat - p1.lat) * Math.PI / 180;
       const dLon = (p2.lon - p1.lon) * Math.PI / 180;
-      const a = Math.sin(dLat/2)**2 + Math.cos(p1.lat*Math.PI/180)*Math.cos(p2.lat*Math.PI/180)*Math.sin(dLon/2)**2;
-      totalDist += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      if (p2.ele > p1.ele) totalElevGain += p2.ele - p1.ele;
+
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(p1.lat * Math.PI / 180) *
+          Math.cos(p2.lat * Math.PI / 180) *
+          Math.sin(dLon / 2) ** 2;
+
+      totalDist += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+      if (p2.ele > p1.ele) {
+        totalElevGain += p2.ele - p1.ele;
+      }
     }
-    const duration = (points[points.length-1].time - points[0].time) / 1000 / 60;
-    const pace = duration / totalDist;
+
+    const duration =
+      (points[points.length - 1].time - points[0].time) / 1000 / 60;
+
+    const pace = totalDist > 0 ? duration / totalDist : 0;
+
     return {
       date: points[0].time.toISOString(),
       distance: parseFloat(totalDist.toFixed(2)),
@@ -355,49 +783,102 @@ function parseGPX(xmlText) {
     return null;
   }
 }
-
 // ===== CLAUDE HELPERS =====
-async function analyzeWithClaude(prompt, imageBase64 = null) {
-  const messages = [];
-  if (imageBase64) {
-    messages.push({
-      role: "user",
-      content: [
-        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } },
-        { type: "text", text: prompt },
-      ],
+async function analyzeWithClaudeWithHistory(prompt, history = []) {
+  try {
+    const safeHistory = Array.isArray(history)
+      ? history.filter(m => m.role && m.content).slice(-12)
+      : [];
+
+    const messages = [
+      ...safeHistory,
+      { role: "user", content: prompt },
+    ];
+
+    const res = await anthropic.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 1500,
+      system: `คุณคืออาจารย์นักวิ่ง AI ผู้ชายที่มีประสบการณ์สูง ผ่านการแข่งมาราธอนและอัลตร้ามาราธอนมาแล้วนับไม่ถ้วน
+
+บุคลิก:
+- เป็นกันเอง สนุก เฮฮา
+- ใช้คำว่า "เฮ้ย", "โอ้โห", "เจ๋งมาก!" บ้างเป็นครั้งคราว
+- เรียกตัวเองว่า "อาจารย์" หรือ "ผม"
+- ตอบภาษาไทยเป็นหลัก
+- motivate ผู้ใช้เสมอ
+- ถ้าขี้เกียจให้แซวเบา ๆ ไม่ดุ
+- ใช้ข้อมูล user context ให้มากที่สุด
+- ถ้าข้อมูลไม่พอ ให้ถามต่อแบบธรรมชาติ`,
+      messages,
     });
-  } else {
-    messages.push({ role: "user", content: prompt });
+
+    return res.content?.[0]?.text || "ขอโทษครับ อาจารย์ยังตอบไม่ได้ตอนนี้";
+  } catch (e) {
+    console.error("Claude with history error:", e.message);
+    return await analyzeWithClaude(prompt);
   }
-  const res = await anthropic.messages.create({
-    model: "claude-sonnet-4-5",
-    max_tokens: 1500,
-    system: `คุณคืออาจารย์นักวิ่ง AI ผู้ชายที่มีประสบการณ์สูง ผ่านการแข่งมาราธอนและอัลตร้ามาราธอนมาแล้วนับไม่ถ้วน มีความรู้ลึกด้านการวิ่ง โภชนาการ และการฝึกซ้อม
+}
 
-บุคลิกและสไตล์การพูด:
-- เป็นกันเอง สนุก เฮฮา ใช้คำว่า "เฮ้ย", "โอ้โห", "เจ๋งมาก!", "ดีมากเลยครับ", "ไปได้เลย!" บ้างเป็นครั้งคราว
-- เรียกตัวเองว่า "อาจารย์" หรือ "ผม" สลับกันตามบริบท
-- ตอบภาษาไทยเป็นหลัก ใช้ภาษาอังกฤษเฉพาะคำศัพท์เทคนิคที่จำเป็น
-- ชอบ motivate และฉลองความสำเร็จเล็กๆ น้อยๆ ของผู้ใช้เสมอ
-- ถ้าผู้ใช้ขี้เกียจหรือหยุดซ้อม จะแซวเบาๆ อย่างเป็นมิตร ไม่ดุหรือกดดัน
-- ให้กำลังใจด้วยความจริงใจ ไม่เสแสร้ง
+async function analyzeWithClaude(prompt, imageBase64 = null) {
+  try {
+    const messages = [];
 
-เมื่อวิเคราะห์รูปผลการวิ่ง ให้อ่านข้อมูลและ return JSON แบบนี้ในบรรทัดแรกก่อนเสมอ แต่ห้ามแสดง JSON ให้ user เห็น:
+    if (imageBase64) {
+      messages.push({
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/jpeg",
+              data: imageBase64,
+            },
+          },
+          { type: "text", text: prompt },
+        ],
+      });
+    } else {
+      messages.push({
+        role: "user",
+        content: prompt,
+      });
+    }
+
+    const res = await anthropic.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 1500,
+      system: `คุณคืออาจารย์นักวิ่ง AI ผู้ชายที่มีประสบการณ์สูง มีความรู้ลึกด้านการวิ่ง โภชนาการ และการฝึกซ้อม
+
+บุคลิก:
+- เป็นกันเอง สนุก เฮฮา
+- ใช้ภาษาไทยเป็นหลัก
+- เรียกตัวเองว่า "อาจารย์" หรือ "ผม"
+- ชอบ motivate และฉลองความสำเร็จเล็ก ๆ
+- ถ้าผู้ใช้ส่งรูปผลการวิ่ง ให้อ่านค่าและคืน JSON บรรทัดแรกเสมอ แต่ห้ามอธิบาย JSON ให้ user เห็น
+
+เมื่อวิเคราะห์รูปผลการวิ่ง ให้ return JSON แบบนี้ในบรรทัดแรก:
 {"distance": 8.5, "pace": 5.5, "duration": 46.75, "calories": 420, "elevGain": 120, "date": "2026-05-16"}
-โดย pace ให้เป็นตัวเลขทศนิยม เช่น 5:30/km = 5.5
-จากนั้นให้ feedback เป็นภาษาไทยตามบุคลิกข้างต้นเท่านั้น ห้ามแสดง JSON หรือ code block ใดๆ ให้ user เห็นเด็ดขาด`,
-    messages,
-  });
-  return res.content[0].text;
+
+pace เป็นตัวเลขทศนิยม เช่น 5:30/km = 5.5`,
+      messages,
+    });
+
+    return res.content?.[0]?.text || "";
+  } catch (e) {
+    console.error("Claude error:", e.message);
+    return "ขอโทษครับ ตอนนี้ AI วิเคราะห์ไม่ได้ชั่วคราว ลองใหม่อีกครั้งนะครับ";
+  }
 }
 
 function extractActivityFromResponse(text) {
   try {
     const jsonMatch = text.match(/\{[\s\S]*?"distance"[\s\S]*?\}/);
     if (!jsonMatch) return null;
+
     const data = JSON.parse(jsonMatch[0]);
     if (!data.distance) return null;
+
     return {
       date: data.date || new Date().toISOString(),
       distance: parseFloat(data.distance) || 0,
@@ -407,22 +888,37 @@ function extractActivityFromResponse(text) {
       elevGain: parseFloat(data.elevGain) || 0,
       source: "Screenshot",
     };
-  } catch (e) { return null; }
+  } catch (e) {
+    return null;
+  }
 }
 
-// ===== FLEX MESSAGE BUILDERS =====
+// ===== RUNNING ESTIMATION HELPERS =====
 function estimateHRZones(paceDecimal) {
-  // ประมาณ HR zone จาก pace
-  if (!paceDecimal || paceDecimal <= 0) return { z1: 10, z2: 40, z3: 35, z4: 15 };
-  if (paceDecimal < 4.5) return { z1: 5, z2: 15, z3: 30, z4: 50 };
-  if (paceDecimal < 5.5) return { z1: 5, z2: 25, z3: 45, z4: 25 };
-  if (paceDecimal < 6.5) return { z1: 10, z2: 45, z3: 35, z4: 10 };
-  if (paceDecimal < 7.5) return { z1: 15, z2: 55, z3: 25, z4: 5 };
+  if (!paceDecimal || paceDecimal <= 0) {
+    return { z1: 10, z2: 40, z3: 35, z4: 15 };
+  }
+
+  if (paceDecimal < 4.5) {
+    return { z1: 5, z2: 15, z3: 30, z4: 50 };
+  }
+
+  if (paceDecimal < 5.5) {
+    return { z1: 5, z2: 25, z3: 45, z4: 25 };
+  }
+
+  if (paceDecimal < 6.5) {
+    return { z1: 10, z2: 45, z3: 35, z4: 10 };
+  }
+
+  if (paceDecimal < 7.5) {
+    return { z1: 15, z2: 55, z3: 25, z4: 5 };
+  }
+
   return { z1: 20, z2: 60, z3: 15, z4: 5 };
 }
 
 function estimateCadence(paceDecimal) {
-  // ประมาณ cadence จาก pace (spm)
   if (!paceDecimal || paceDecimal <= 0) return 160;
   if (paceDecimal < 4.5) return 185;
   if (paceDecimal < 5.5) return 178;
@@ -433,10 +929,11 @@ function estimateCadence(paceDecimal) {
 
 function buildHRZoneBar(zones) {
   const total = zones.z1 + zones.z2 + zones.z3 + zones.z4;
+
   const z1w = Math.round((zones.z1 / total) * 10);
   const z2w = Math.round((zones.z2 / total) * 10);
   const z3w = Math.round((zones.z3 / total) * 10);
-  const z4w = 10 - z1w - z2w - z3w;
+  const z4w = Math.max(1, 10 - z1w - z2w - z3w);
 
   const zoneColors = ["#64B5F6", "#81C784", "#FFD54F", "#FF7043"];
   const zoneLabels = ["Z1", "Z2", "Z3", "Z4"];
@@ -444,104 +941,501 @@ function buildHRZoneBar(zones) {
   const zonePcts = [zones.z1, zones.z2, zones.z3, zones.z4];
 
   return [
-    { type: "text", text: "❤️ Heart Rate Zones", size: "sm", color: "#555555", weight: "bold", margin: "md" },
     {
-      type: "box", layout: "horizontal", margin: "sm", height: "16px", cornerRadius: "4px",
+      type: "text",
+      text: "❤️ Heart Rate Zones",
+      size: "sm",
+      color: "#555555",
+      weight: "bold",
+      margin: "md",
+    },
+    {
+      type: "box",
+      layout: "horizontal",
+      margin: "sm",
+      height: "16px",
+      cornerRadius: "4px",
       contents: zoneWidths.map((w, i) => ({
-        type: "box", layout: "vertical", flex: w || 1,
+        type: "box",
+        layout: "vertical",
+        flex: w || 1,
         backgroundColor: zoneColors[i],
         contents: [],
       })),
     },
     {
-      type: "box", layout: "horizontal", margin: "xs",
+      type: "box",
+      layout: "horizontal",
+      margin: "xs",
       contents: zoneLabels.map((label, i) => ({
-        type: "box", layout: "vertical", flex: 1, alignItems: "center",
+        type: "box",
+        layout: "vertical",
+        flex: 1,
+        alignItems: "center",
         contents: [
-          { type: "text", text: label, size: "xxs", color: zoneColors[i], weight: "bold", align: "center" },
-          { type: "text", text: `${zonePcts[i]}%`, size: "xxs", color: "#888888", align: "center" },
+          {
+            type: "text",
+            text: label,
+            size: "xxs",
+            color: zoneColors[i],
+            weight: "bold",
+            align: "center",
+          },
+          {
+            type: "text",
+            text: `${zonePcts[i]}%`,
+            size: "xxs",
+            color: "#888888",
+            align: "center",
+          },
         ],
       })),
     },
   ];
 }
 
+// ===== FLEX MESSAGE BUILDERS =====
+function buildTodayStatsFlexMessage(activity = {}) {
+  const distance = activity.distance || 0;
+  const pace = activity.paceText || paceDecimalToText(activity.pace);
+  const duration = activity.durationText || durationMinToText(activity.duration);
+  const calories = activity.calories || 0;
+  const cadence = activity.cadence || estimateCadence(activity.pace);
+  const elevGain = activity.elevGain || 0;
+
+  return {
+    type: "flex",
+    altText: "สถิติวันนี้",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "20px",
+        backgroundColor: "#FFFFFF",
+        contents: [
+          {
+            type: "text",
+            text: "สถิติวันนี้",
+            size: "xl",
+            weight: "bold",
+            color: "#111111",
+          },
+          {
+            type: "text",
+            text: "ผลการวิ่งล่าสุดของคุณ",
+            size: "sm",
+            color: "#8A8A8A",
+            margin: "sm",
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            margin: "xl",
+            spacing: "md",
+            contents: [
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: `${distance.toFixed ? distance.toFixed(2) : distance}`,
+                    size: "xxl",
+                    weight: "bold",
+                    color: "#111111",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "km",
+                    size: "xs",
+                    color: "#8A8A8A",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: pace || "-",
+                    size: "xxl",
+                    weight: "bold",
+                    color: "#111111",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "/km",
+                    size: "xs",
+                    color: "#8A8A8A",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: duration || "-",
+                    size: "xl",
+                    weight: "bold",
+                    color: "#111111",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "เวลา",
+                    size: "xs",
+                    color: "#8A8A8A",
+                    align: "center",
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: "separator",
+            margin: "xl",
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            margin: "lg",
+            spacing: "md",
+            contents: [
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  { type: "text", text: "🔥", size: "lg", align: "center" },
+                  {
+                    type: "text",
+                    text: `${calories}`,
+                    size: "md",
+                    weight: "bold",
+                    align: "center",
+                    color: "#111111",
+                  },
+                  {
+                    type: "text",
+                    text: "kcal",
+                    size: "xs",
+                    color: "#8A8A8A",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  { type: "text", text: "👟", size: "lg", align: "center" },
+                  {
+                    type: "text",
+                    text: `${cadence}`,
+                    size: "md",
+                    weight: "bold",
+                    align: "center",
+                    color: "#111111",
+                  },
+                  {
+                    type: "text",
+                    text: "cadence",
+                    size: "xs",
+                    color: "#8A8A8A",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  { type: "text", text: "⛰️", size: "lg", align: "center" },
+                  {
+                    type: "text",
+                    text: `${elevGain}m`,
+                    size: "md",
+                    weight: "bold",
+                    align: "center",
+                    color: "#111111",
+                  },
+                  {
+                    type: "text",
+                    text: "elev gain",
+                    size: "xs",
+                    color: "#8A8A8A",
+                    align: "center",
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: "box",
+            layout: "vertical",
+            margin: "xl",
+            paddingAll: "16px",
+            cornerRadius: "20px",
+            backgroundColor: "#F5F5F7",
+            contents: [
+              {
+                type: "text",
+                text: "AI Insight",
+                size: "sm",
+                weight: "bold",
+                color: "#111111",
+              },
+              {
+                type: "text",
+                text: "วันนี้ pace ค่อนข้างนิ่งดี ลองคุมให้อยู่โซนสบาย ๆ เพื่อสะสมความต่อเนื่อง",
+                size: "sm",
+                color: "#555555",
+                wrap: true,
+                margin: "sm",
+              },
+            ],
+          },
+          {
+            type: "button",
+            margin: "lg",
+            style: "primary",
+            color: "#06C755",
+            action: {
+              type: "postback",
+              label: "ดูคำแนะนำวันนี้",
+              data: "action=today_recommendation",
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 function buildStatsFlexMessage(stats, label) {
   if (!stats) return null;
+
   const { totalDistance, avgPaceMin, avgPaceSec, totalCalories, activities } = stats;
 
-  // คำนวณ cadence และ HR zones จาก pace เฉลี่ย
   const avgPaceDecimal = avgPaceMin + avgPaceSec / 60;
   const cadence = estimateCadence(avgPaceDecimal);
   const hrZones = estimateHRZones(avgPaceDecimal);
 
   const activityRows = activities.slice(0, 5).map((a) => {
-    const date = new Date(a.date).toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short" });
-    const pMin = Math.floor(a.pace || 0);
-    const pSec = Math.round(((a.pace || 0) - pMin) * 60);
+    const date = new Date(a.date).toLocaleDateString("th-TH", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    });
+
     return {
-      type: "box", layout: "horizontal", paddingTop: "4px",
+      type: "box",
+      layout: "horizontal",
+      paddingTop: "4px",
       contents: [
-        { type: "text", text: date, size: "sm", color: "#555555", flex: 3 },
-        { type: "text", text: `${(a.distance||0).toFixed(2)}km`, size: "sm", color: "#111111", flex: 2, align: "center" },
-        { type: "text", text: a.pace ? `${pMin}:${String(pSec).padStart(2,"0")}/km` : "-", size: "sm", color: "#E8703A", flex: 3, align: "end" },
+        {
+          type: "text",
+          text: date,
+          size: "sm",
+          color: "#555555",
+          flex: 3,
+        },
+        {
+          type: "text",
+          text: `${(a.distance || 0).toFixed(2)}km`,
+          size: "sm",
+          color: "#111111",
+          flex: 2,
+          align: "center",
+        },
+        {
+          type: "text",
+          text: a.pace ? `${paceDecimalToText(a.pace)}/km` : "-",
+          size: "sm",
+          color: "#E8703A",
+          flex: 3,
+          align: "end",
+        },
       ],
     };
   });
 
   return {
-    type: "flex", altText: `🏃 สรุปการวิ่ง${label}`,
+    type: "flex",
+    altText: `🏃 สรุปการวิ่ง${label}`,
     contents: {
       type: "bubble",
       header: {
-        type: "box", layout: "vertical", backgroundColor: "#E8703A", paddingAll: "16px",
+        type: "box",
+        layout: "vertical",
+        backgroundColor: "#E8703A",
+        paddingAll: "16px",
         contents: [
-          { type: "text", text: "🏃 อาจารย์นักวิ่ง", color: "#ffffff", size: "sm", weight: "bold" },
-          { type: "text", text: `สรุปการวิ่ง${label}`, color: "#ffffff99", size: "xs" },
+          {
+            type: "text",
+            text: "🏃 อาจารย์นักวิ่ง",
+            color: "#ffffff",
+            size: "sm",
+            weight: "bold",
+          },
+          {
+            type: "text",
+            text: `สรุปการวิ่ง${label}`,
+            color: "#ffffff99",
+            size: "xs",
+          },
         ],
       },
       body: {
-        type: "box", layout: "vertical", paddingAll: "16px",
+        type: "box",
+        layout: "vertical",
+        paddingAll: "16px",
         contents: [
-          // Stats หลัก - ลบครั้งออก เพิ่ม cadence
           {
-            type: "box", layout: "horizontal",
+            type: "box",
+            layout: "horizontal",
             contents: [
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: `${totalDistance.toFixed(1)}`, size: "xl", weight: "bold", color: "#E8703A", align: "center" },
-                { type: "text", text: "km รวม", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: avgPaceMin > 0 ? `${avgPaceMin}:${String(avgPaceSec).padStart(2,"0")}` : "-", size: "xl", weight: "bold", color: "#E8703A", align: "center" },
-                { type: "text", text: "pace /km", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: `${cadence}`, size: "xl", weight: "bold", color: "#E8703A", align: "center" },
-                { type: "text", text: "spm รอบขา", size: "xs", color: "#888888", align: "center" },
-              ]},
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                alignItems: "center",
+                contents: [
+                  {
+                    type: "text",
+                    text: `${totalDistance.toFixed(1)}`,
+                    size: "xl",
+                    weight: "bold",
+                    color: "#E8703A",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "km รวม",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                alignItems: "center",
+                contents: [
+                  {
+                    type: "text",
+                    text: avgPaceMin > 0 ? `${avgPaceMin}:${String(avgPaceSec).padStart(2, "0")}` : "-",
+                    size: "xl",
+                    weight: "bold",
+                    color: "#E8703A",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "pace /km",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                alignItems: "center",
+                contents: [
+                  {
+                    type: "text",
+                    text: `${cadence}`,
+                    size: "xl",
+                    weight: "bold",
+                    color: "#E8703A",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "spm รอบขา",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
             ],
             paddingBottom: "12px",
           },
           { type: "separator" },
-          // HR Zone bar
           ...buildHRZoneBar(hrZones),
           { type: "separator", margin: "md" },
-          // Activity rows
           {
-            type: "box", layout: "horizontal", paddingTop: "8px", paddingBottom: "4px",
+            type: "box",
+            layout: "horizontal",
+            paddingTop: "8px",
+            paddingBottom: "4px",
             contents: [
-              { type: "text", text: "วันที่", size: "xs", color: "#888888", flex: 3 },
-              { type: "text", text: "ระยะ", size: "xs", color: "#888888", flex: 2, align: "center" },
-              { type: "text", text: "Pace", size: "xs", color: "#888888", flex: 3, align: "end" },
+              {
+                type: "text",
+                text: "วันที่",
+                size: "xs",
+                color: "#888888",
+                flex: 3,
+              },
+              {
+                type: "text",
+                text: "ระยะ",
+                size: "xs",
+                color: "#888888",
+                flex: 2,
+                align: "center",
+              },
+              {
+                type: "text",
+                text: "Pace",
+                size: "xs",
+                color: "#888888",
+                flex: 3,
+                align: "end",
+              },
             ],
           },
           ...activityRows,
           { type: "separator", margin: "12px" },
           {
-            type: "box", layout: "horizontal", paddingTop: "8px",
+            type: "box",
+            layout: "horizontal",
+            paddingTop: "8px",
             contents: [
-              { type: "text", text: "🔥 แคลอรี่รวม", size: "sm", color: "#555555" },
-              { type: "text", text: `${totalCalories.toFixed(0)} kcal`, size: "sm", color: "#E8703A", align: "end", weight: "bold" },
+              {
+                type: "text",
+                text: "🔥 แคลอรี่รวม",
+                size: "sm",
+                color: "#555555",
+              },
+              {
+                type: "text",
+                text: `${totalCalories.toFixed(0)} kcal`,
+                size: "sm",
+                color: "#E8703A",
+                align: "end",
+                weight: "bold",
+              },
             ],
           },
         ],
@@ -553,102 +1447,314 @@ function buildStatsFlexMessage(stats, label) {
 function buildCarouselMessage(activities) {
   const runs = activities.slice(0, 5);
   if (runs.length === 0) return null;
+
   const bubbles = runs.map((a) => {
-    const pMin = Math.floor(a.pace || 0);
-    const pSec = Math.round(((a.pace || 0) - pMin) * 60);
-    const date = new Date(a.date).toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "short" });
+    const date = new Date(a.date).toLocaleDateString("th-TH", {
+      weekday: "long",
+      day: "numeric",
+      month: "short",
+    });
+
     return {
-      type: "bubble", size: "kilo",
+      type: "bubble",
+      size: "kilo",
       header: {
-        type: "box", layout: "vertical", backgroundColor: "#E8703A", paddingAll: "12px",
+        type: "box",
+        layout: "vertical",
+        backgroundColor: "#E8703A",
+        paddingAll: "12px",
         contents: [
-          { type: "text", text: `📍 ${a.source || "Manual"}`, color: "#ffffff", size: "xs" },
-          { type: "text", text: date, color: "#ffffff", size: "sm", weight: "bold", wrap: true },
+          {
+            type: "text",
+            text: `📍 ${a.source || "Manual"}`,
+            color: "#ffffff",
+            size: "xs",
+          },
+          {
+            type: "text",
+            text: date,
+            color: "#ffffff",
+            size: "sm",
+            weight: "bold",
+            wrap: true,
+          },
         ],
       },
       body: {
-        type: "box", layout: "vertical", paddingAll: "12px",
+        type: "box",
+        layout: "vertical",
+        paddingAll: "12px",
         contents: [
           {
-            type: "box", layout: "horizontal", paddingBottom: "8px",
+            type: "box",
+            layout: "horizontal",
+            paddingBottom: "8px",
             contents: [
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: `${(a.distance||0).toFixed(2)}`, size: "xxl", weight: "bold", color: "#E8703A", align: "center" },
-                { type: "text", text: "km", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: a.pace ? `${pMin}:${String(pSec).padStart(2,"0")}` : "-", size: "xl", weight: "bold", color: "#333333", align: "center" },
-                { type: "text", text: "/km", size: "xs", color: "#888888", align: "center" },
-              ]},
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: `${(a.distance || 0).toFixed(2)}`,
+                    size: "xxl",
+                    weight: "bold",
+                    color: "#E8703A",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "km",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: a.pace ? paceDecimalToText(a.pace) : "-",
+                    size: "xl",
+                    weight: "bold",
+                    color: "#333333",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "/km",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
             ],
           },
           { type: "separator" },
           {
-            type: "box", layout: "horizontal", paddingTop: "8px",
+            type: "box",
+            layout: "horizontal",
+            paddingTop: "8px",
             contents: [
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: a.duration ? `${Math.floor(a.duration)}` : "-", size: "sm", color: "#333333", align: "center" },
-                { type: "text", text: "นาที", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: a.elevGain ? `${a.elevGain}m` : "-", size: "sm", color: "#333333", align: "center" },
-                { type: "text", text: "elevation", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: a.calories ? `${a.calories}` : "-", size: "sm", color: "#333333", align: "center" },
-                { type: "text", text: "kcal", size: "xs", color: "#888888", align: "center" },
-              ]},
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: a.duration ? `${Math.floor(a.duration)}` : "-",
+                    size: "sm",
+                    color: "#333333",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "นาที",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: a.elevGain ? `${a.elevGain}m` : "-",
+                    size: "sm",
+                    color: "#333333",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "elevation",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                contents: [
+                  {
+                    type: "text",
+                    text: a.calories ? `${a.calories}` : "-",
+                    size: "sm",
+                    color: "#333333",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "kcal",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
             ],
           },
         ],
       },
     };
   });
-  return { type: "flex", altText: "📋 ประวัติวิ่ง 5 ครั้งล่าสุด", contents: { type: "carousel", contents: bubbles } };
+
+  return {
+    type: "flex",
+    altText: "📋 ประวัติวิ่ง 5 ครั้งล่าสุด",
+    contents: {
+      type: "carousel",
+      contents: bubbles,
+    },
+  };
 }
 
 function buildChallengeFlexMessage(userId, currentKm) {
   const challenge = userChallenges[userId];
   if (!challenge) return null;
+
   const progress = Math.min((currentKm / challenge.goal) * 100, 100);
   const remaining = Math.max(challenge.goal - currentKm, 0);
-  const daysLeft = Math.max(Math.ceil((new Date(challenge.deadline) - new Date()) / 86400000), 0);
-  const progressBar = "█".repeat(Math.floor(progress / 10)) + "░".repeat(10 - Math.floor(progress / 10));
-  const color = progress >= 100 ? "#27AE60" : progress >= 50 ? "#E8703A" : "#E74C3C";
+  const daysLeft = Math.max(
+    Math.ceil((new Date(challenge.deadline) - new Date()) / 86400000),
+    0
+  );
+
+  const progressBar =
+    "█".repeat(Math.floor(progress / 10)) +
+    "░".repeat(10 - Math.floor(progress / 10));
+
+  const color =
+    progress >= 100 ? "#27AE60" : progress >= 50 ? "#E8703A" : "#E74C3C";
+
   return {
-    type: "flex", altText: `🎯 Challenge: ${challenge.goal}km`,
+    type: "flex",
+    altText: `🎯 Challenge: ${challenge.goal}km`,
     contents: {
       type: "bubble",
       header: {
-        type: "box", layout: "vertical", backgroundColor: color, paddingAll: "16px",
+        type: "box",
+        layout: "vertical",
+        backgroundColor: color,
+        paddingAll: "16px",
         contents: [
-          { type: "text", text: "🎯 Challenge ของคุณ", color: "#ffffff", size: "sm", weight: "bold" },
-          { type: "text", text: progress >= 100 ? "🏆 สำเร็จแล้ว!" : `เหลืออีก ${daysLeft} วัน`, color: "#ffffff99", size: "xs" },
+          {
+            type: "text",
+            text: "🎯 Challenge ของคุณ",
+            color: "#ffffff",
+            size: "sm",
+            weight: "bold",
+          },
+          {
+            type: "text",
+            text: progress >= 100 ? "🏆 สำเร็จแล้ว!" : `เหลืออีก ${daysLeft} วัน`,
+            color: "#ffffff99",
+            size: "xs",
+          },
         ],
       },
       body: {
-        type: "box", layout: "vertical", paddingAll: "16px",
+        type: "box",
+        layout: "vertical",
+        paddingAll: "16px",
         contents: [
           {
-            type: "box", layout: "horizontal", paddingBottom: "12px",
+            type: "box",
+            layout: "horizontal",
+            paddingBottom: "12px",
             contents: [
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: `${currentKm.toFixed(1)}`, size: "xxl", weight: "bold", color, align: "center" },
-                { type: "text", text: "km วิ่งแล้ว", size: "xs", color: "#888888", align: "center" },
-              ]},
-              { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-                { type: "text", text: `${challenge.goal}`, size: "xxl", weight: "bold", color: "#333333", align: "center" },
-                { type: "text", text: "km เป้าหมาย", size: "xs", color: "#888888", align: "center" },
-              ]},
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                alignItems: "center",
+                contents: [
+                  {
+                    type: "text",
+                    text: `${currentKm.toFixed(1)}`,
+                    size: "xxl",
+                    weight: "bold",
+                    color,
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "km วิ่งแล้ว",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 1,
+                alignItems: "center",
+                contents: [
+                  {
+                    type: "text",
+                    text: `${challenge.goal}`,
+                    size: "xxl",
+                    weight: "bold",
+                    color: "#333333",
+                    align: "center",
+                  },
+                  {
+                    type: "text",
+                    text: "km เป้าหมาย",
+                    size: "xs",
+                    color: "#888888",
+                    align: "center",
+                  },
+                ],
+              },
             ],
           },
-          { type: "text", text: `${progressBar} ${progress.toFixed(0)}%`, size: "sm", color, align: "center", margin: "md" },
+          {
+            type: "text",
+            text: `${progressBar} ${progress.toFixed(0)}%`,
+            size: "sm",
+            color,
+            align: "center",
+            margin: "md",
+          },
           { type: "separator", margin: "12px" },
           {
-            type: "box", layout: "horizontal", paddingTop: "8px",
+            type: "box",
+            layout: "horizontal",
+            paddingTop: "8px",
             contents: [
-              { type: "text", text: progress >= 100 ? "🎉 ทำได้แล้วค่ะ!" : `เหลืออีก ${remaining.toFixed(1)} km`, size: "sm", color: "#555555" },
-              { type: "text", text: `${daysLeft} วัน`, size: "sm", color, align: "end", weight: "bold" },
+              {
+                type: "text",
+                text:
+                  progress >= 100
+                    ? "🎉 ทำได้แล้วครับ!"
+                    : `เหลืออีก ${remaining.toFixed(1)} km`,
+                size: "sm",
+                color: "#555555",
+              },
+              {
+                type: "text",
+                text: `${daysLeft} วัน`,
+                size: "sm",
+                color,
+                align: "end",
+                weight: "bold",
+              },
             ],
           },
         ],
@@ -659,1012 +1765,512 @@ function buildChallengeFlexMessage(userId, currentKm) {
 
 function buildPRFlexMessage(prs, activityName) {
   return {
-    type: "flex", altText: "🏅 คุณทำ PR แล้ว!",
+    type: "flex",
+    altText: "🏅 คุณทำ PR แล้ว!",
     contents: {
       type: "bubble",
       header: {
-        type: "box", layout: "vertical", backgroundColor: "#F39C12", paddingAll: "16px",
+        type: "box",
+        layout: "vertical",
+        backgroundColor: "#F39C12",
+        paddingAll: "16px",
         contents: [
-          { type: "text", text: "🏅 Personal Record!", color: "#ffffff", size: "md", weight: "bold", align: "center" },
-          { type: "text", text: "ยอดเยี่ยมมากค่ะ! 🎉", color: "#ffffff99", size: "sm", align: "center" },
+          {
+            type: "text",
+            text: "🏅 Personal Record!",
+            color: "#ffffff",
+            size: "md",
+            weight: "bold",
+            align: "center",
+          },
+          {
+            type: "text",
+            text: "ยอดเยี่ยมมากครับ! 🎉",
+            color: "#ffffff99",
+            size: "sm",
+            align: "center",
+          },
         ],
       },
       body: {
-        type: "box", layout: "vertical", paddingAll: "16px",
+        type: "box",
+        layout: "vertical",
+        paddingAll: "16px",
         contents: [
-          { type: "text", text: activityName, size: "sm", color: "#888888", align: "center" },
-          ...prs.map(pr => ({ type: "text", text: pr, size: "sm", color: "#333333", margin: "md", wrap: true, align: "center" })),
-          { type: "text", text: "ขอแสดงความยินดีด้วยนะคะ 💪", size: "sm", color: "#E8703A", margin: "lg", align: "center", weight: "bold" },
+          {
+            type: "text",
+            text: activityName || "กิจกรรมล่าสุด",
+            size: "sm",
+            color: "#888888",
+            align: "center",
+          },
+          ...prs.map(pr => ({
+            type: "text",
+            text: pr,
+            size: "sm",
+            color: "#333333",
+            margin: "md",
+            wrap: true,
+            align: "center",
+          })),
+          {
+            type: "text",
+            text: "อาจารย์ขอปรบมือให้เลย 💪",
+            size: "sm",
+            color: "#E8703A",
+            margin: "lg",
+            align: "center",
+            weight: "bold",
+          },
         ],
       },
     },
   };
 }
 
-
-// ===== UPDATE NOTIFICATION =====
 function buildUpdateNotificationFlex() {
   return {
     type: "flex",
-    altText: "🆕 อาจารย์นักวิ่ง AI Beta 2.0 - อัปเดตใหม่!",
+    altText: "🆕 อาจารย์นักวิ่ง AI Beta 2.0",
     contents: {
       type: "bubble",
       header: {
-        type: "box", layout: "vertical", backgroundColor: "#1A1A2E", paddingAll: "16px",
+        type: "box",
+        layout: "vertical",
+        backgroundColor: "#1A1A2E",
+        paddingAll: "16px",
         contents: [
-          { type: "text", text: "🏃 อาจารย์นักวิ่ง AI", color: "#E8703A", size: "md", weight: "bold" },
-          { type: "text", text: "Beta 2.0 — มีอะไรใหม่บ้าง?", color: "#ffffff", size: "sm" },
+          {
+            type: "text",
+            text: "🏃 อาจารย์นักวิ่ง AI",
+            color: "#E8703A",
+            size: "md",
+            weight: "bold",
+          },
+          {
+            type: "text",
+            text: "Beta 2.0 — มีอะไรใหม่บ้าง?",
+            color: "#ffffff",
+            size: "sm",
+          },
         ],
       },
       body: {
-        type: "box", layout: "vertical", paddingAll: "16px", spacing: "md",
+        type: "box",
+        layout: "vertical",
+        paddingAll: "16px",
+        spacing: "md",
         contents: [
           {
-            type: "box", layout: "horizontal", spacing: "sm",
-            contents: [
-              { type: "text", text: "✨", size: "sm", flex: 0 },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "Flex Message", size: "sm", weight: "bold", color: "#E8703A" },
-                { type: "text", text: "สถิติแสดงเป็น Card สวยงาม", size: "xs", color: "#888888", wrap: true },
-              ]},
-            ],
+            type: "text",
+            text: "✨ AI จำเป้าหมายและบริบทของคุณได้",
+            size: "sm",
+            color: "#333333",
+            wrap: true,
           },
           {
-            type: "box", layout: "horizontal", spacing: "sm",
-            contents: [
-              { type: "text", text: "🎯", size: "sm", flex: 0 },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "Challenge ตั้งเป้า", size: "sm", weight: "bold", color: "#E8703A" },
-                { type: "text", text: "ตั้งเป้า km/เดือน พร้อม progress bar", size: "xs", color: "#888888", wrap: true },
-              ]},
-            ],
+            type: "text",
+            text: "📸 ส่ง screenshot ผลการวิ่งให้ AI วิเคราะห์ได้",
+            size: "sm",
+            color: "#333333",
+            wrap: true,
           },
           {
-            type: "box", layout: "horizontal", spacing: "sm",
-            contents: [
-              { type: "text", text: "🏅", size: "sm", flex: 0 },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "ตรวจจับ PR อัตโนมัติ", size: "sm", weight: "bold", color: "#E8703A" },
-                { type: "text", text: "แจ้งเตือนทันทีเมื่อทำ Personal Record", size: "xs", color: "#888888", wrap: true },
-              ]},
-            ],
+            type: "text",
+            text: "📊 สรุปสถิติรายวันและรายสัปดาห์",
+            size: "sm",
+            color: "#333333",
+            wrap: true,
           },
           {
-            type: "box", layout: "horizontal", spacing: "sm",
-            contents: [
-              { type: "text", text: "📸", size: "sm", flex: 0 },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "อ่านรูป + ไฟล์ GPX", size: "sm", weight: "bold", color: "#E8703A" },
-                { type: "text", text: "ส่งรูป screenshot หรือไฟล์ .gpx บันทึก stat ได้เลย", size: "xs", color: "#888888", wrap: true },
-              ]},
-            ],
+            type: "text",
+            text: "🎯 ตั้ง Challenge พร้อม Progress Bar",
+            size: "sm",
+            color: "#333333",
+            wrap: true,
           },
           {
-            type: "box", layout: "horizontal", spacing: "sm",
-            contents: [
-              { type: "text", text: "📊", size: "sm", flex: 0 },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "ดึงข้อมูล Strava 6 เดือน", size: "sm", weight: "bold", color: "#E8703A" },
-                { type: "text", text: "เชื่อม Strava ครั้งเดียว ดึงประวัติย้อนหลัง 6 เดือนเลย", size: "xs", color: "#888888", wrap: true },
-              ]},
-            ],
-          },
-          {
-            type: "box", layout: "horizontal", spacing: "sm",
-            contents: [
-              { type: "text", text: "🌅", size: "sm", flex: 0 },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "แจ้งเตือนวันจันทร์อัตโนมัติ", size: "sm", weight: "bold", color: "#E8703A" },
-                { type: "text", text: "รับสรุปสัปดาห์ทุกเช้าวันจันทร์ 8.00น.", size: "xs", color: "#888888", wrap: true },
-              ]},
-            ],
-          },
-          { type: "separator", margin: "md" },
-          {
-            type: "box", layout: "horizontal", paddingTop: "8px",
-            contents: [
-              { type: "text", text: "💬 พิมพ์ /update เพื่อดูอีกครั้ง", size: "xs", color: "#aaaaaa", align: "center" },
-            ],
+            type: "text",
+            text: "🏅 ตรวจจับ PR อัตโนมัติ",
+            size: "sm",
+            color: "#333333",
+            wrap: true,
           },
         ],
       },
-      footer: {
-        type: "box", layout: "vertical", backgroundColor: "#F5F5F5", paddingAll: "12px",
-        contents: [
-          { type: "text", text: "🏃 อาจารย์นักวิ่ง AI Beta 2.0", size: "xs", color: "#888888", align: "center" },
-        ],
-      },
     },
-  };
-}
-
-
-// ===== EXERCISE DATABASE (built-in) =====
-const EXERCISES = {
-  chest: [
-    { name: "Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/push-up.jpg" },
-    { name: "Wide Push-Up", equipment: "body only", target: "Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/wide-push-up.jpg" },
-    { name: "Diamond Push-Up", equipment: "body only", target: "Triceps/Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/diamond-push-up.jpg" },
-    { name: "Dumbbell Bench Press", equipment: "dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-bench-press.jpg" },
-    { name: "Dumbbell Flyes", equipment: "dumbbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-flyes.jpg" },
-    { name: "Incline Dumbbell Press", equipment: "dumbbell", target: "Upper Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-incline-press.jpg" },
-    { name: "Barbell Bench Press", equipment: "barbell", target: "Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-bench-press.jpg" },
-    { name: "Incline Barbell Press", equipment: "barbell", target: "Upper Chest", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-incline-press.jpg" },
-  ],
-  shoulders: [
-    { name: "Pike Push-Up", equipment: "body only", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/pike-push-up.jpg" },
-    { name: "Wall Handstand Hold", equipment: "body only", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/wall-handstand-hold.jpg" },
-    { name: "Dumbbell Shoulder Press", equipment: "dumbbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-shoulder-press.jpg" },
-    { name: "Dumbbell Lateral Raise", equipment: "dumbbell", target: "Side Delts", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-lateral-raise.jpg" },
-    { name: "Dumbbell Front Raise", equipment: "dumbbell", target: "Front Delts", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-front-raise.jpg" },
-    { name: "Barbell Overhead Press", equipment: "barbell", target: "Shoulders", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-overhead-press.jpg" },
-  ],
-  triceps: [
-    { name: "Tricep Dips", equipment: "body only", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/tricep-dips.jpg" },
-    { name: "Diamond Push-Up", equipment: "body only", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/diamond-push-up.jpg" },
-    { name: "Dumbbell Tricep Kickback", equipment: "dumbbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-tricep-kickback.jpg" },
-    { name: "Dumbbell Overhead Extension", equipment: "dumbbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-overhead-extension.jpg" },
-    { name: "Skull Crusher", equipment: "barbell", target: "Triceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-skull-crusher.jpg" },
-  ],
-  back: [
-    { name: "Pull-Up", equipment: "body only", target: "Lats", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/pull-up.jpg" },
-    { name: "Chin-Up", equipment: "body only", target: "Lats & Biceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/chin-up.jpg" },
-    { name: "Superman", equipment: "body only", target: "Lower Back", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/superman.jpg" },
-    { name: "Dumbbell One Arm Row", equipment: "dumbbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-one-arm-row.jpg" },
-    { name: "Dumbbell Bent Over Row", equipment: "dumbbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-bent-over-row.jpg" },
-    { name: "Barbell Bent Over Row", equipment: "barbell", target: "Back", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-bent-over-row.jpg" },
-    { name: "Deadlift", equipment: "barbell", target: "Back/Legs", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-deadlift.jpg" },
-  ],
-  biceps: [
-    { name: "Inverted Row", equipment: "body only", target: "Biceps & Back", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/inverted-row.jpg" },
-    { name: "Dumbbell Alternate Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-alternate-curl.jpg" },
-    { name: "Dumbbell Hammer Curl", equipment: "dumbbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-hammer-curl.jpg" },
-    { name: "Barbell Curl", equipment: "barbell", target: "Biceps", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-curl.jpg" },
-  ],
-  quads: [
-    { name: "Bodyweight Squat", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bodyweight-squat.jpg" },
-    { name: "Jump Squat", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/jump-squat.jpg" },
-    { name: "Walking Lunge", equipment: "body only", target: "Quads", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/walking-lunge.jpg" },
-    { name: "Dumbbell Goblet Squat", equipment: "dumbbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-goblet-squat.jpg" },
-    { name: "Dumbbell Lunge", equipment: "dumbbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-lunge.jpg" },
-    { name: "Barbell Squat", equipment: "barbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-squat.jpg" },
-    { name: "Barbell Front Squat", equipment: "barbell", target: "Quads", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-front-squat.jpg" },
-  ],
-  hamstrings: [
-    { name: "Glute Bridge", equipment: "body only", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/glute-bridge.jpg" },
-    { name: "Nordic Curl", equipment: "body only", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/nordic-curl.jpg" },
-    { name: "Dumbbell Romanian Deadlift", equipment: "dumbbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-romanian-deadlift.jpg" },
-    { name: "Barbell Romanian Deadlift", equipment: "barbell", target: "Hamstrings", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-romanian-deadlift.jpg" },
-  ],
-  glutes: [
-    { name: "Donkey Kick", equipment: "body only", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/donkey-kick.jpg" },
-    { name: "Single Leg Glute Bridge", equipment: "body only", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/single-leg-glute-bridge.jpg" },
-    { name: "Dumbbell Bulgarian Split Squat", equipment: "dumbbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-bulgarian-split-squat.jpg" },
-    { name: "Barbell Hip Thrust", equipment: "barbell", target: "Glutes", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-hip-thrust.jpg" },
-  ],
-  calves: [
-    { name: "Standing Calf Raise", equipment: "body only", target: "Calves", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/standing-calf-raise.jpg" },
-    { name: "Jump Rope", equipment: "body only", target: "Calves", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/jump-rope.jpg" },
-    { name: "Dumbbell Calf Raise", equipment: "dumbbell", target: "Calves", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-calf-raise.jpg" },
-  ],
-  abs: [
-    { name: "Plank", equipment: "body only", target: "Core", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/plank.jpg" },
-    { name: "Crunches", equipment: "body only", target: "Abs", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/crunches.jpg" },
-    { name: "Leg Raise", equipment: "body only", target: "Lower Abs", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/leg-raise.jpg" },
-    { name: "Mountain Climber", equipment: "body only", target: "Core", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/mountain-climber.jpg" },
-    { name: "Bicycle Crunch", equipment: "body only", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bicycle-crunch.jpg" },
-    { name: "Russian Twist", equipment: "body only", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/russian-twist.jpg" },
-    { name: "Dumbbell Side Bend", equipment: "dumbbell", target: "Obliques", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/db-side-bend.jpg" },
-    { name: "Barbell Ab Rollout", equipment: "barbell", target: "Core", gifUrl: "https://raw.githubusercontent.com/paphavinmusicconcept-prog/strava-line-bot/main/images/bb-ab-rollout.jpg" },
-  ],
-};
-
-const WORKOUT_SPLITS = {
-  push: { name: "Push Day 💪", muscles: ["chest", "shoulders", "triceps"], color: "#E74C3C" },
-  pull: { name: "Pull Day 🦾", muscles: ["back", "biceps"], color: "#2980B9" },
-  legs: { name: "Leg Day 🦵", muscles: ["quads", "hamstrings", "glutes", "calves"], color: "#27AE60" },
-  upper: { name: "Upper Body 🏋️", muscles: ["chest", "back", "shoulders"], color: "#8E44AD" },
-  core: { name: "Core Day 🔥", muscles: ["abs"], color: "#E8703A" },
-};
-
-const EXERCISE_PRESCRIPTION = {
-  strength: { sets: 4, reps: "6-8", rest: "2-3 นาที" },
-  hypertrophy: { sets: 4, reps: "10-12", rest: "60-90 วิ" },
-  endurance: { sets: 3, reps: "15-20", rest: "30-45 วิ" },
-};
-
-function getExercisesForSplit(splitType) {
-  const split = WORKOUT_SPLITS[splitType] || WORKOUT_SPLITS.push;
-  let exercises = [];
-  for (const muscle of split.muscles) {
-    const list = EXERCISES[muscle] || [];
-    // สุ่มท่าจากแต่ละกลุ่ม
-    const shuffled = list.sort(() => Math.random() - 0.5);
-    exercises = exercises.concat(shuffled.slice(0, 2));
-    if (exercises.length >= 6) break;
-  }
-  return exercises.slice(0, 6);
-}
-
-function buildWeightTrainingCarousel(splitType = "push", goal = "hypertrophy") {
-  const split = WORKOUT_SPLITS[splitType] || WORKOUT_SPLITS.push;
-  const prescription = EXERCISE_PRESCRIPTION[goal] || EXERCISE_PRESCRIPTION.hypertrophy;
-  const exercises = getExercisesForSplit(splitType);
-
-  if (exercises.length === 0) return null;
-
-  // Header bubble
-  const headerBubble = {
-    type: "bubble", size: "kilo",
-    header: {
-      type: "box", layout: "vertical", backgroundColor: split.color, paddingAll: "16px",
-      contents: [
-        { type: "text", text: "🏋️ Weight Training", color: "#ffffff", size: "xs" },
-        { type: "text", text: split.name, color: "#ffffff", size: "lg", weight: "bold" },
-        { type: "text", text: `${exercises.length} ท่า | ${prescription.sets} sets × ${prescription.reps} reps`, color: "#ffffff99", size: "xs" },
-      ],
-    },
-    body: {
-      type: "box", layout: "vertical", paddingAll: "16px", spacing: "sm",
-      contents: [
-        { type: "text", text: "กลุ่มกล้ามเนื้อวันนี้:", size: "sm", color: "#555555", weight: "bold" },
-        ...split.muscles.map(m => ({
-          type: "box", layout: "horizontal", spacing: "sm",
-          contents: [
-            { type: "text", text: "•", size: "sm", color: split.color, flex: 0 },
-            { type: "text", text: m.charAt(0).toUpperCase() + m.slice(1), size: "sm", color: "#333333" },
-          ],
-        })),
-        { type: "separator", margin: "md" },
-        { type: "text", text: "👉 เลื่อนดูท่าออกกำลังกายได้เลยค่ะ →", size: "xs", color: "#888888", wrap: true, margin: "md" },
-      ],
-    },
-  };
-
-  // Exercise bubbles
-  const bubbles = exercises.map((ex, i) => ({
-    type: "bubble", size: "kilo",
-    hero: {
-      type: "image",
-      url: ex.gifUrl,
-      size: "full",
-      aspectRatio: "4:3",
-      aspectMode: "cover",
-    },
-    body: {
-      type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm",
-      contents: [
-        { type: "text", text: `${i + 1}. ${ex.name}`, size: "sm", weight: "bold", color: split.color, wrap: true },
-        {
-          type: "box", layout: "horizontal",
-          contents: [
-            { type: "text", text: "💪", size: "xs", flex: 0 },
-            { type: "text", text: ex.target, size: "xs", color: "#555555", margin: "sm" },
-            { type: "text", text: `🏋️ ${ex.equipment}`, size: "xs", color: "#555555", align: "end" },
-          ],
-        },
-        { type: "separator" },
-        {
-          type: "box", layout: "horizontal", paddingTop: "8px",
-          contents: [
-            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-              { type: "text", text: `${prescription.sets}`, size: "xl", weight: "bold", color: split.color, align: "center" },
-              { type: "text", text: "sets", size: "xs", color: "#888888", align: "center" },
-            ]},
-            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-              { type: "text", text: prescription.reps, size: "md", weight: "bold", color: split.color, align: "center" },
-              { type: "text", text: "reps", size: "xs", color: "#888888", align: "center" },
-            ]},
-            { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-              { type: "text", text: prescription.rest, size: "xs", weight: "bold", color: split.color, align: "center", wrap: true },
-              { type: "text", text: "พัก", size: "xs", color: "#888888", align: "center" },
-            ]},
-          ],
-        },
-      ],
-    },
-  }));
-
-  return {
-    type: "flex",
-    altText: `🏋️ ${split.name} - ${exercises.length} ท่าวันนี้`,
-    contents: { type: "carousel", contents: [headerBubble, ...bubbles] },
-  };
-}
-
-
-// ===== BUILD WEIGHT TRAINING BY EQUIPMENT =====
-async function fetchExercisesFromRapidAPI(bodyPart, equipment) {
-  try {
-    // equipment mapping ตรงกับ ExerciseDB API
-    const equipMap = {
-      "body only": "body weight",
-      "dumbbell": "dumbbell",
-      "barbell": "barbell",
-    };
-    const equipQuery = equipMap[equipment] || equipment;
-
-    console.log(`Fetching: bodyPart=${bodyPart}, equipment=${equipQuery}`);
-
-    const res = await axios.get(
-      `https://exercisedb.p.rapidapi.com/exercises/bodyPart/${encodeURIComponent(bodyPart)}`,
-      {
-        headers: {
-          "X-RapidAPI-Key": CONFIG.RAPIDAPI_KEY,
-          "X-RapidAPI-Host": "exercisedb.p.rapidapi.com",
-        },
-        params: { limit: 100, offset: 0 },
-        timeout: 10000,
-      }
-    );
-
-    const exercises = Array.isArray(res.data) ? res.data : [];
-    console.log(`Got ${exercises.length} exercises for ${bodyPart}`);
-
-    // log ดู equipment values จริงๆ จาก API
-    const equipValues = [...new Set(exercises.map(e => e.equipment))];
-    console.log(`Equipment values in API: ${equipValues.join(", ")}`);
-
-    // กรองตาม equipment
-    const filtered = exercises.filter(ex =>
-      ex.equipment && ex.equipment.toLowerCase() === equipQuery.toLowerCase()
-    );
-    console.log(`Filtered to ${filtered.length} exercises for equipment: ${equipQuery}`);
-
-    if (filtered.length === 0) return null;
-
-    // สุ่ม 5 ท่า
-    const shuffled = [...filtered].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, 5).map(ex => ({
-      name: ex.name.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
-      equipment: ex.equipment,
-      target: ex.target,
-      gifUrl: ex.gifUrl,
-    }));
-  } catch (e) {
-    console.error("RapidAPI ExerciseDB error:", e.message, e.response?.status);
-    return null;
-  }
-}
-
-async function buildWeightTrainingByEquipment(muscles, equipment) {
-  const equipmentMap = {
-    "body only": "Body Weight 🤸",
-    "dumbbell": "Dumbbell 🏋️",
-    "barbell": "Barbell 🔩",
-  };
-  const equipLabel = equipmentMap[equipment] || equipment;
-  const splitColor = equipment === "body only" ? "#27AE60" : equipment === "dumbbell" ? "#2980B9" : "#E74C3C";
-  const prescription = { sets: 4, reps: "10-12", rest: "60-90 วิ" };
-
-  // bodyPart mapping สำหรับ RapidAPI (ต้องตรงกับ API จริงๆ)
-  const bodyPartMap = {
-    chest: "chest",
-    shoulders: "shoulders",
-    triceps: "upper arms",
-    back: "back",
-    biceps: "upper arms",
-    quads: "upper legs",
-    hamstrings: "upper legs",
-    glutes: "upper legs",
-    calves: "lower legs",
-    abs: "waist",
-  };
-
-  // ลองดึงจาก RapidAPI ก่อน
-  let exercises = [];
-  const triedParts = new Set();
-
-  for (const muscle of muscles) {
-    const bodyPart = bodyPartMap[muscle];
-    if (!bodyPart || triedParts.has(bodyPart)) continue;
-    triedParts.add(bodyPart);
-
-    const fetched = await fetchExercisesFromRapidAPI(bodyPart, equipment);
-    if (fetched && fetched.length > 0) {
-      exercises = exercises.concat(fetched);
-      if (exercises.length >= 5) break;
-    }
-  }
-
-  // Fallback: ใช้ local database ถ้า API ไม่ตอบ
-  if (exercises.length === 0) {
-    console.log("Falling back to local exercise database");
-    for (const muscle of muscles) {
-      const list = EXERCISES[muscle] || [];
-      const filtered = list.filter(ex => ex.equipment === equipment);
-      if (filtered.length === 0) continue;
-      const shuffled = [...filtered].sort(() => Math.random() - 0.5);
-      exercises = exercises.concat(shuffled.slice(0, 2));
-      if (exercises.length >= 5) break;
-    }
-  }
-
-  if (exercises.length === 0) return null;
-  exercises = exercises.slice(0, 5);
-
-  // Header bubble
-  const headerBubble = {
-    type: "bubble", size: "kilo",
-    header: {
-      type: "box", layout: "vertical", backgroundColor: splitColor, paddingAll: "16px",
-      contents: [
-        { type: "text", text: "🏋️ Weight Training", color: "#ffffff", size: "xs" },
-        { type: "text", text: equipLabel, color: "#ffffff", size: "lg", weight: "bold" },
-        { type: "text", text: `${exercises.length} ท่า | ${prescription.sets} sets × ${prescription.reps} reps`, color: "#ffffff99", size: "xs" },
-      ],
-    },
-    body: {
-      type: "box", layout: "vertical", paddingAll: "16px", spacing: "sm",
-      contents: [
-        { type: "text", text: "อุปกรณ์:", size: "sm", color: "#555555", weight: "bold" },
-        { type: "text", text: equipLabel, size: "md", color: splitColor, weight: "bold" },
-        { type: "separator", margin: "md" },
-        { type: "text", text: "👉 เลื่อนดูท่าได้เลยค่ะ →", size: "xs", color: "#888888", wrap: true, margin: "md" },
-      ],
-    },
-  };
-
-  // Exercise bubbles
-  const bubbles = exercises.map((ex, i) => {
-    const hasImage = !!ex.gifUrl;
-    const bodyContents = [
-      { type: "text", text: `${i + 1}. ${ex.name}`, size: "sm", weight: "bold", color: splitColor, wrap: true },
-      {
-        type: "box", layout: "horizontal",
-        contents: [
-          { type: "text", text: "💪", size: "xs", flex: 0 },
-          { type: "text", text: ex.target, size: "xs", color: "#555555", margin: "sm", flex: 1 },
-          { type: "text", text: `🏋️ ${ex.equipment}`, size: "xs", color: "#555555", align: "end" },
-        ],
-      },
-      { type: "separator" },
-      {
-        type: "box", layout: "horizontal", paddingTop: "8px",
-        contents: [
-          { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-            { type: "text", text: `${prescription.sets}`, size: "xl", weight: "bold", color: splitColor, align: "center" },
-            { type: "text", text: "sets", size: "xs", color: "#888888", align: "center" },
-          ]},
-          { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-            { type: "text", text: prescription.reps, size: "md", weight: "bold", color: splitColor, align: "center" },
-            { type: "text", text: "reps", size: "xs", color: "#888888", align: "center" },
-          ]},
-          { type: "box", layout: "vertical", flex: 1, alignItems: "center", contents: [
-            { type: "text", text: prescription.rest, size: "xs", weight: "bold", color: splitColor, align: "center", wrap: true },
-            { type: "text", text: "พัก", size: "xs", color: "#888888", align: "center" },
-          ]},
-        ],
-      },
-    ];
-
-    const bubble = {
-      type: "bubble", size: "kilo",
-      body: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm", contents: bodyContents },
-    };
-
-    if (hasImage) {
-      bubble.hero = {
-        type: "image",
-        url: ex.gifUrl,
-        size: "full",
-        aspectRatio: "4:3",
-        aspectMode: "cover",
-      };
-    } else {
-      bubble.hero = {
-        type: "box", layout: "vertical", height: "150px",
-        backgroundColor: splitColor + "33",
-        justifyContent: "center", alignItems: "center",
-        contents: [
-          { type: "text", text: "🏋️", size: "xxl", align: "center" },
-          { type: "text", text: ex.name, size: "xs", color: splitColor, align: "center", wrap: true },
-        ],
-      };
-    }
-
-    return bubble;
-  });
-
-  return {
-    type: "flex",
-    altText: `🏋️ ${equipLabel} - ${exercises.length} ท่าวันนี้`,
-    contents: { type: "carousel", contents: [headerBubble, ...bubbles] },
   };
 }
 
 // ===== LINE MESSAGING =====
 function makeQuickReply(items) {
-  return { items: items.map(i => ({ type: "action", action: { type: "message", label: i.label, text: i.text } })) };
+  return {
+    items: items.map(i => ({
+      type: "action",
+      action: {
+        type: "message",
+        label: i.label,
+        text: i.text,
+      },
+    })),
+  };
 }
 
 async function pushMessage(userId, text, quickReply = null) {
   await axios.post(
     "https://api.line.me/v2/bot/message/push",
-    { to: userId, messages: [{ type: "text", text, ...(quickReply ? { quickReply } : {}) }] },
-    { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` } }
+    {
+      to: userId,
+      messages: [
+        {
+          type: "text",
+          text,
+          ...(quickReply ? { quickReply } : {}),
+        },
+      ],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+      },
+    }
+  );
+}
+
+async function replyMessage(replyToken, messages) {
+  await axios.post(
+    "https://api.line.me/v2/bot/message/reply",
+    {
+      replyToken,
+      messages: Array.isArray(messages) ? messages : [messages],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+      },
+    }
   );
 }
 
 async function pushFlexMessage(userId, flexContent) {
   await axios.post(
     "https://api.line.me/v2/bot/message/push",
-    { to: userId, messages: [flexContent] },
-    { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` } }
+    {
+      to: userId,
+      messages: [flexContent],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+      },
+    }
   );
+}
+
+async function replyText(replyToken, text, quickReply = null) {
+  await replyMessage(replyToken, {
+    type: "text",
+    text,
+    ...(quickReply ? { quickReply } : {}),
+  });
+}
+
+async function replyFlex(replyToken, flexContent) {
+  await replyMessage(replyToken, flexContent);
+}
+
+// ===== MAIN AI CHAT FLOW =====
+async function handleAIChat(userId, text, replyToken) {
+  await saveConversation(userId, "user", text);
+
+  const { context, history } = await loadUserContext(userId);
+
+  const prompt = `
+${context}
+
+User message:
+${text}
+
+กรุณาตอบเป็นภาษาไทยในบทบาทอาจารย์นักวิ่ง AI
+ตอบให้เหมาะกับข้อมูลจริงของ user
+ถ้าข้อมูลยังไม่พอ ให้ถามต่อแบบเป็นธรรมชาติ
+อย่าตอบยาวเกินไป
+`;
+
+  const answer = await analyzeWithClaudeWithHistory(prompt, history);
+
+  await saveConversation(userId, "assistant", answer);
+
+  extractMemoryFromChat(userId, text, answer);
+
+  await replyText(replyToken, answer);
 }
 
 // ===== WEBHOOK =====
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
+
   const events = req.body.events || [];
 
   for (const event of events) {
-    const userId = event.source?.userId || event.source?.groupId || event.source?.roomId;
-    console.log("userId:", userId, "event type:", event.type);
+    const userId =
+      event.source?.userId ||
+      event.source?.groupId ||
+      event.source?.roomId;
+
+    if (!userId) continue;
 
     try {
-      // Follow
       if (event.type === "follow") {
-        const msg = hasStrava(userId)
-          ? `🏃 ยินดีต้อนรับกลับมานะคะ!\nเชื่อม Strava ไว้แล้ว ใช้ Rich Menu ได้เลยค่ะ 💪`
-          : `🏃 สวัสดีค่ะ! ยินดีต้อนรับสู่ อาจารย์นักวิ่ง!\n\n📌 วิธีใช้งาน:\n• ส่ง 📸 รูป screenshot ผลการวิ่งจากแอปใดก็ได้\n• ส่ง 📁 ไฟล์ .gpx จาก GPS watch\n• พิมพ์ /connect เพื่อเชื่อม Strava (ไม่บังคับ)\n\nเริ่มได้เลยค่ะ! 💪`;
-        await pushMessage(userId, msg);
+        await pushMessage(
+          userId,
+          "🏃 สวัสดีครับ! ยินดีต้อนรับสู่อาจารย์นักวิ่ง AI\n\nส่งรูปผลการวิ่ง, ไฟล์ GPX หรือพิมพ์คุยกับอาจารย์ได้เลยครับ 💪"
+        );
+
         await pushFlexMessage(userId, buildUpdateNotificationFlex());
+        continue;
       }
 
-      // Postback
       if (event.type === "postback") {
-        const data = event.postback.data;
+        const data = event.postback?.data || "";
 
-        if (data === "action=today") {
-          await pushMessage(userId, "⏳ กำลังดึงข้อมูล...");
-          const activities = await getActivitiesForUser(userId, 1);
-          const stats = calcStatsFromActivities(activities);
-          if (!stats) {
-            await pushMessage(userId, "ยังไม่มีกิจกรรมวันนี้ค่ะ 😴\n\nลองส่งรูปผลการวิ่งมาได้เลยนะคะ 📸");
-          } else {
-            const flex = buildStatsFlexMessage(stats, "วันนี้");
-            if (flex) await pushFlexMessage(userId, flex);
+        if (data === "action=today_stats") {
+          const activities = await getActivitiesForUser(userId, 7);
+          const latest = activities[0];
+
+          if (!latest) {
+            await replyText(event.replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot หรือเชื่อม Strava ก่อนได้เลย");
+            continue;
           }
 
-        } else if (data === "action=week") {
-          await pushMessage(userId, "⏳ กำลังดึงข้อมูล...");
+          await replyFlex(event.replyToken, buildTodayStatsFlexMessage(latest));
+          continue;
+        }
+
+        if (data === "action=today_recommendation") {
+          await handleAIChat(userId, "ช่วยแนะนำการซ้อมวันนี้จากสถิติล่าสุดของผม", event.replyToken);
+          continue;
+        }
+
+        if (data === "action=weekly_summary") {
           const activities = await getActivitiesForUser(userId, 7);
           const stats = calcStatsFromActivities(activities);
+
           if (!stats) {
-            await pushMessage(userId, "ยังไม่มีกิจกรรมสัปดาห์นี้ค่ะ 😴\n\nลองส่งรูปผลการวิ่งมาได้เลยนะคะ 📸");
-          } else {
-            const flex = buildStatsFlexMessage(stats, "สัปดาห์นี้");
-            if (flex) await pushFlexMessage(userId, flex);
+            await replyText(event.replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
+            continue;
           }
 
-        } else if (data === "action=plan") {
-          await pushMessage(userId, "⏳ กำลังสร้างตารางซ้อม...");
-          const activities = await getActivitiesForUser(userId, 28);
-          const stats = calcStatsFromActivities(activities);
-          if (!stats) {
-            await pushMessage(userId, "ยังไม่มีข้อมูลการวิ่งค่ะ 😴\n\nส่งรูปผลการวิ่งมาก่อนได้เลยนะคะ 📸");
-          } else {
-            const summary = `วิ่ง ${stats.count} ครั้ง รวม ${stats.totalDistance.toFixed(1)}km ใน 4 สัปดาห์ที่ผ่านมา`;
-            const plan = await analyzeWithClaude(`สร้างตารางซ้อม 7 วันจากข้อมูลนี้: ${summary} ตอบภาษาไทย`);
-            await pushMessage(userId, plan);
-          }
-
-        } else if (data === "action=recovery") {
-          // Weight Training flow - Step 1: เลือกส่วนร่างกาย
-          userSessions[userId] = { waitingFor: "weight_body_part" };
-          const qrBodyPart = makeQuickReply([
-            { label: "💪 Upper Body", text: "weight_upper" },
-            { label: "🔥 Core", text: "weight_core" },
-            { label: "🦵 Lower Body", text: "weight_lower" },
-          ]);
-          await pushMessage(userId, "🏋️ Weight Training วันนี้!\n\nStep 1: อยากเล่นส่วนไหนคะ?", qrBodyPart);
-
-        } else if (data === "action=goal") {
-          if (userChallenges[userId]) {
-            const activities = await getActivitiesForUser(userId, 30);
-            const stats = calcStatsFromActivities(activities);
-            const currentKm = stats ? stats.totalDistance : 0;
-            const flex = buildChallengeFlexMessage(userId, currentKm);
-            if (flex) await pushFlexMessage(userId, flex);
-            await pushMessage(userId, "อยากตั้ง Challenge ใหม่ไหมคะ? พิมพ์ /challenge ได้เลยค่ะ");
-          } else {
-            userSessions[userId] = { waitingFor: "challenge_km" };
-            const qr = makeQuickReply([
-              { label: "50 km", text: "50" }, { label: "100 km", text: "100" },
-              { label: "150 km", text: "150" }, { label: "200 km", text: "200" },
-            ]);
-            await pushMessage(userId, "🎯 มาตั้ง Challenge กันเลยค่ะ!\n\nอยากวิ่งกี่ km ภายในเดือนนี้คะ?", qr);
-          }
-
-        } else if (data === "action=chat") {
-          userSessions[userId] = { waitingFor: "free_chat" };
-          const qr = makeQuickReply([
-            { label: "🏃 วิธีเพิ่ม pace", text: "จะเพิ่ม pace ยังไงดีคะ" },
-            { label: "💪 ซ้อมก่อนแข่ง", text: "ควรซ้อมยังไงก่อนวันแข่ง" },
-            { label: "😴 พักฟื้นยังไง", text: "ควรพักฟื้นยังไงหลังวิ่ง" },
-          ]);
-          await pushMessage(userId, "💬 ถามอะไรเกี่ยวกับการวิ่งได้เลยค่ะ! 🏃", qr);
+          await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
+          continue;
         }
+
+        await handleAIChat(userId, `User กดเมนู: ${data}`, event.replyToken);
+        continue;
       }
 
-      // Message
       if (event.type === "message") {
-        const session = userSessions[userId] || {};
+        const message = event.message;
 
-        // รูปภาพ
-        if (event.message.type === "image") {
-          const imgRes = await axios.get(
-            `https://api-data.line.me/v2/bot/message/${event.message.id}/content`,
-            { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` }, responseType: "arraybuffer" }
-          );
-          const imageBase64 = Buffer.from(imgRes.data).toString("base64");
-
-          if (session.waitingFor === "recovery_image") {
-            await pushMessage(userId, "⏳ กำลังวิเคราะห์ Recovery...");
-            const analysis = await analyzeWithClaude(
-              `วิเคราะห์รูป Recovery จากแอปออกกำลังกายนี้ให้หน่อยค่ะ อ่านค่าต่างๆ เช่น Readiness, HRV, Sleep แล้วแนะนำแผนซ้อมวันนี้ ตอบภาษาไทย (ไม่ต้อง return JSON)`,
-              imageBase64
-            );
-            await pushMessage(userId, analysis);
-            userSessions[userId] = {};
-          } else {
-            await pushMessage(userId, "⏳ กำลังอ่านผลการวิ่ง...");
-            const analysis = await analyzeWithClaude(
-              `อ่านผลการวิ่งจากรูปนี้แล้ว return JSON ในบรรทัดแรกก่อนเลยค่ะ:
-{"distance": X.XX, "pace": X.XX, "duration": X.X, "calories": XXX, "elevGain": XX, "date": "YYYY-MM-DD"}
-แล้วค่อยให้ feedback การวิ่งเป็นภาษาไทย`,
-              imageBase64
-            );
-            const activity = extractActivityFromResponse(analysis);
-            if (activity) {
-              await dbSaveActivity(userId, activity);
-              const prs = checkPR(userId, activity);
-              if (prs) await pushFlexMessage(userId, buildPRFlexMessage(prs, "การวิ่งล่าสุด"));
-              if (userChallenges[userId]) {
-                const allAct = await getActivitiesForUser(userId, 30);
-                const stats = calcStatsFromActivities(allAct);
-                if (stats) {
-                  const flex = buildChallengeFlexMessage(userId, stats.totalDistance);
-                  if (flex) await pushFlexMessage(userId, flex);
-                }
-              }
-            }
-            // ลบ JSON และ code block ออกก่อนส่ง feedback
-            const feedbackText = analysis
-              .replace(/```json[\s\S]*?```/g, "")
-              .replace(/```[\s\S]*?```/g, "")
-              .replace(/\{[\s\S]*?"distance"[\s\S]*?\}/g, "")
-              .trim();
-            await pushMessage(userId, feedbackText || "วิเคราะห์เสร็จแล้วครับ! ดูข้อมูลด้านบนได้เลย 💪");
-
-            // ประเมินการวิ่งอัตโนมัติหลังบันทึก
-            if (activity) {
-              const pMin = Math.floor(activity.pace || 0);
-              const pSec = Math.round(((activity.pace || 0) - pMin) * 60);
-              const cadence = estimateCadence(activity.pace);
-              const zones = estimateHRZones(activity.pace);
-              const evalPrompt = `ประเมินการวิ่งนี้ให้หน่อยครับ:
-- ระยะทาง: ${activity.distance}km
-- Pace: ${pMin}:${String(pSec).padStart(2,"0")}/km
-- เวลา: ${Math.floor(activity.duration)} นาที
-- รอบขาโดยประมาณ: ${cadence} spm
-- HR Zone โดยประมาณ: Zone1 ${zones.z1}%, Zone2 ${zones.z2}%, Zone3 ${zones.z3}%, Zone4 ${zones.z4}%
-ให้ feedback สั้นๆ 2-3 ประโยค เน้น cadence และ zone ที่วิ่งอยู่ว่าเหมาะสมไหม ควรปรับอะไรบ้าง`;
-              const evalResult = await analyzeWithClaude(evalPrompt);
-              await pushMessage(userId, `📊 การประเมินการวิ่ง:\n${evalResult}`);
-            }
-          }
-
-        // ไฟล์
-        } else if (event.message.type === "file") {
-          const fileName = event.message.fileName || "";
-          await pushMessage(userId, `⏳ กำลังประมวลผลไฟล์ ${fileName}...`);
-          const fileRes = await axios.get(
-            `https://api-data.line.me/v2/bot/message/${event.message.id}/content`,
-            { headers: { Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}` }, responseType: "arraybuffer" }
-          );
-          if (fileName.toLowerCase().endsWith(".gpx")) {
-            const xmlText = Buffer.from(fileRes.data).toString("utf-8");
-            const gpxData = parseGPX(xmlText);
-            if (gpxData) {
-              saveActivity(userId, gpxData);
-              const prs = checkPR(userId, gpxData);
-              if (prs) await pushFlexMessage(userId, buildPRFlexMessage(prs, "การวิ่งจาก GPX"));
-              const pMin = Math.floor(gpxData.pace);
-              const pSec = Math.round((gpxData.pace - pMin) * 60);
-              await pushMessage(userId, `✅ บันทึกการวิ่งสำเร็จค่ะ!\n📏 ${gpxData.distance}km | ⏱ ${pMin}:${String(pSec).padStart(2,"0")}/km | ⏰ ${Math.floor(gpxData.duration)} นาที | ⛰ ${gpxData.elevGain}m`);
-              const cadenceGPX = estimateCadence(gpxData.pace);
-              const zonesGPX = estimateHRZones(gpxData.pace);
-              const analysisGPX = await analyzeWithClaude(`วิเคราะห์และประเมินการวิ่งนี้ให้หน่อยครับ: ${gpxData.distance}km pace ${pMin}:${String(pSec).padStart(2,"0")}/km เวลา ${Math.floor(gpxData.duration)} นาที elevation ${gpxData.elevGain}m รอบขาโดยประมาณ ${cadenceGPX} spm HR Zone โดยประมาณ Z1:${zonesGPX.z1}% Z2:${zonesGPX.z2}% Z3:${zonesGPX.z3}% Z4:${zonesGPX.z4}% ตอบภาษาไทย`);
-              await pushMessage(userId, analysisGPX);
-            } else {
-              await pushMessage(userId, "❌ ไม่สามารถอ่านไฟล์ GPX ได้ค่ะ ลองส่งรูป screenshot แทนได้เลยนะคะ 📸");
-            }
-          } else {
-            await pushMessage(userId, "⚠️ รองรับเฉพาะไฟล์ .gpx ค่ะ\nหรือส่งเป็นรูป screenshot ได้เลยนะคะ 📸");
-          }
-
-        // ข้อความ
-        } else if (event.message.type === "text") {
-          const text = event.message.text.trim();
+        if (message.type === "text") {
+          const text = message.text.trim();
 
           if (text === "/update") {
-            await pushFlexMessage(userId, buildUpdateNotificationFlex());
-
-          } else if (text.startsWith("weight_") && session.waitingFor === "weight_body_part") {
-            // Step 2: เลือกอุปกรณ์
-            const bodyPartMap = {
-              weight_upper: { label: "Upper Body 💪", muscles: ["chest", "shoulders", "triceps", "back", "biceps"] },
-              weight_core: { label: "Core 🔥", muscles: ["abs"] },
-              weight_lower: { label: "Lower Body 🦵", muscles: ["quads", "hamstrings", "glutes", "calves"] },
-            };
-            const bodyPart = bodyPartMap[text] || bodyPartMap.weight_upper;
-            userSessions[userId] = { waitingFor: "weight_equipment", bodyPart };
-            const qrEquipment = makeQuickReply([
-              { label: "🤸 Body Weight", text: "equip_bodyweight" },
-              { label: "🏋️ Dumbbell", text: "equip_dumbbell" },
-              { label: "🔩 Barbell", text: "equip_barbell" },
-            ]);
-            await pushMessage(userId, `✅ ${bodyPart.label}
-
-Step 2: ใช้อุปกรณ์อะไรคะ?`, qrEquipment);
-
-          } else if (text.startsWith("equip_") && session.waitingFor === "weight_equipment") {
-            // Step 3: แสดง Carousel GIF
-            const equipMap = {
-              equip_bodyweight: "body only",
-              equip_dumbbell: "dumbbell",
-              equip_barbell: "barbell",
-            };
-            const equipment = equipMap[text] || "dumbbell";
-            const bodyPart = session.bodyPart || { label: "Upper Body", muscles: ["chest", "shoulders"] };
-            userSessions[userId] = {};
-            await pushMessage(userId, `⏳ กำลังสร้างโปรแกรม ${bodyPart.label}...`);
-            const carousel = await buildWeightTrainingByEquipment(bodyPart.muscles, equipment);
-            if (carousel) {
-              await pushFlexMessage(userId, carousel);
-            } else {
-              await pushMessage(userId, "❌ ไม่มีท่าที่ตรงกับอุปกรณ์นี้ค่ะ ลองเลือกใหม่ได้เลยนะคะ");
-            }
-
-          } else if (text === "/weight" || text.startsWith("/weight ")) {
-            const parts = text.trim().split(" ");
-            const splitType = parts[1] || "push";
-            const goal = parts[2] || "hypertrophy";
-            const validSplits = ["push", "pull", "legs", "upper", "core"];
-            if (!validSplits.includes(splitType)) {
-              const qr = makeQuickReply([
-                { label: "💪 Push Day", text: "/weight push" },
-                { label: "🦾 Pull Day", text: "/weight pull" },
-                { label: "🦵 Leg Day", text: "/weight legs" },
-                { label: "🏋️ Upper Body", text: "/weight upper" },
-                { label: "🔥 Core Day", text: "/weight core" },
-              ]);
-              await pushMessage(userId, "เลือก Weight Training วันนี้ได้เลยค่ะ 👇", qr);
-            } else {
-              await pushMessage(userId, `⏳ กำลังสร้างโปรแกรม ${splitType.toUpperCase()} วันนี้...`);
-              const carousel = await buildWeightTrainingCarousel(splitType, goal);
-              if (carousel) {
-                await pushFlexMessage(userId, carousel);
-              } else {
-                await pushMessage(userId, "❌ ไม่สามารถสร้างโปรแกรมได้ค่ะ ลองใหม่อีกครั้งนะคะ");
-              }
-            }
-
-          } else if (text === "/connect") {
-            const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CONFIG.STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(`${CONFIG.SERVER_URL}/strava/callback?lineUserId=${userId}`)}&approval_prompt=force&scope=activity:read_all`;
-            await pushMessage(userId, `🔗 กดลิงก์นี้เพื่อเชื่อม Strava ได้เลยค่ะ:\n${authUrl}`);
-
-          } else if (text === "/disconnect") {
-            delete stravaTokens[userId];
-            await pushMessage(userId, "✅ ยกเลิกการเชื่อม Strava แล้วค่ะ\nตอนนี้ใช้การส่งรูป/ไฟล์แทนได้เลยนะคะ 📸");
-
-          } else if (text === "/history") {
-            const activities = await getActivitiesForUser(userId, 30);
-            if (!activities || activities.length === 0) {
-              await pushMessage(userId, "ยังไม่มีประวัติการวิ่งค่ะ 😴");
-            } else {
-              const carousel = buildCarouselMessage(activities);
-              if (carousel) await pushFlexMessage(userId, carousel);
-            }
-
-          } else if (text === "/challenge") {
-            userSessions[userId] = { waitingFor: "challenge_km" };
-            const qr = makeQuickReply([
-              { label: "50 km", text: "50" }, { label: "100 km", text: "100" },
-              { label: "150 km", text: "150" }, { label: "200 km", text: "200" },
-            ]);
-            await pushMessage(userId, "🎯 ตั้ง Challenge ใหม่เลยค่ะ!\n\nอยากวิ่งกี่ km ภายในเดือนนี้คะ?", qr);
-
-          } else if (session.waitingFor === "challenge_km") {
-            const km = parseFloat(text);
-            if (isNaN(km) || km <= 0) {
-              await pushMessage(userId, "❌ กรุณาใส่ตัวเลขนะคะ เช่น 100");
-            } else {
-              const now = new Date();
-              const deadline = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
-              userChallenges[userId] = { goal: km, deadline, startDate: now.toISOString().split("T")[0] };
-              await dbSaveChallenge(userId, userChallenges[userId]);
-              userSessions[userId] = {};
-              await pushMessage(userId, `✅ ตั้ง Challenge สำเร็จแล้วค่ะ!\n🎯 เป้าหมาย: วิ่ง ${km}km ภายใน ${deadline}\n\nกดปุ่ม "เป้าหมาย" เพื่อดู progress ได้เลยนะคะ 💪`);
-            }
-
-          } else {
-            // ดึงข้อมูลการวิ่งก่อนตอบ
-            const [recent7, recent30, recent60] = await Promise.all([
-              dbGetActivities(userId, 7),
-              dbGetActivities(userId, 30),
-              dbGetActivities(userId, 60),
-            ]);
-
-            const stats7 = calcStatsFromActivities(recent7);
-            const stats30 = calcStatsFromActivities(recent30);
-            const stats60 = calcStatsFromActivities(recent60);
-            const challenge = await dbGetChallenge(userId);
-            const pr = await dbGetPR(userId);
-
-            // รวม session ล่าสุดจาก memory เข้าไปด้วย (กรณีเพิ่งบันทึก)
-            const memoryRecent = getRecentActivities(userId, 7);
-            const dbRecent7 = recent7 || [];
-            // merge และ deduplicate โดยใช้วันที่
-            const mergedRecent = [...dbRecent7];
-            for (const m of memoryRecent) {
-              const exists = mergedRecent.some(d => 
-                Math.abs(new Date(d.date) - new Date(m.date)) < 60000 && d.distance === m.distance
-              );
-              if (!exists) mergedRecent.push(m);
-            }
-            mergedRecent.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-            // สร้าง context จากข้อมูลจริง
-            let userContext = "=== ข้อมูลการวิ่งของ user ===\n";
-            
-            // เพิ่มข้อมูล session ล่าสุด
-            if (mergedRecent.length > 0) {
-              const latest = mergedRecent[0];
-              const lPaceMin = Math.floor(latest.pace || 0);
-              const lPaceSec = Math.round(((latest.pace || 0) - lPaceMin) * 60);
-              const lDate = new Date(latest.date).toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long" });
-              userContext += `\n🏃 การวิ่งล่าสุด (${lDate}):\n`;
-              userContext += `- ระยะทาง: ${(latest.distance||0).toFixed(2)}km\n`;
-              userContext += `- Pace: ${lPaceMin}:${String(lPaceSec).padStart(2,"0")}/km\n`;
-              userContext += `- เวลา: ${Math.floor(latest.duration||0)} นาที\n`;
-              userContext += `- แคลอรี่: ${(latest.calories||0).toFixed(0)} kcal\n`;
-              userContext += `- Elevation: ${(latest.elevGain||0).toFixed(0)}m\n`;
-              userContext += `- แหล่งข้อมูล: ${latest.source || "manual"}\n`;
-            }
-
-            if (stats7) {
-              userContext += `\n📅 7 วันล่าสุด:\n`;
-              userContext += `- วิ่ง ${stats7.count} ครั้ง รวม ${stats7.totalDistance.toFixed(1)}km\n`;
-              userContext += `- Pace เฉลี่ย ${stats7.avgPaceMin}:${String(stats7.avgPaceSec).padStart(2,"0")}/km\n`;
-              userContext += `- แคลอรี่รวม ${stats7.totalCalories.toFixed(0)} kcal\n`;
-            } else {
-              userContext += `\n📅 7 วันล่าสุด: ไม่มีข้อมูล\n`;
-            }
-
-            if (stats30) {
-              userContext += `\n📅 30 วันล่าสุด:\n`;
-              userContext += `- วิ่ง ${stats30.count} ครั้ง รวม ${stats30.totalDistance.toFixed(1)}km\n`;
-              userContext += `- Pace เฉลี่ย ${stats30.avgPaceMin}:${String(stats30.avgPaceSec).padStart(2,"0")}/km\n`;
-            } else {
-              userContext += `\n📅 30 วันล่าสุด: ไม่มีข้อมูล\n`;
-            }
-
-            if (stats60) {
-              userContext += `\n📅 60 วันล่าสุด:\n`;
-              userContext += `- วิ่ง ${stats60.count} ครั้ง รวม ${stats60.totalDistance.toFixed(1)}km\n`;
-              userContext += `- Pace เฉลี่ย ${stats60.avgPaceMin}:${String(stats60.avgPaceSec).padStart(2,"0")}/km\n`;
-            }
-
-            if (pr) {
-              const prPaceMin = Math.floor(pr.fastestPace);
-              const prPaceSec = Math.round((pr.fastestPace - prPaceMin) * 60);
-              userContext += `\n🏅 Personal Records:\n`;
-              userContext += `- วิ่งไกลสุด: ${pr.longestRun.toFixed(2)}km\n`;
-              userContext += `- Pace เร็วสุด: ${prPaceMin}:${String(prPaceSec).padStart(2,"0")}/km\n`;
-            }
-
-            if (challenge) {
-              const allAct = await dbGetActivities(userId, 30);
-              const allStats = calcStatsFromActivities(allAct);
-              const currentKm = allStats ? allStats.totalDistance : 0;
-              userContext += `\n🎯 Challenge ปัจจุบัน:\n`;
-              userContext += `- เป้าหมาย ${challenge.goal}km ภายใน ${challenge.deadline}\n`;
-              userContext += `- วิ่งไปแล้ว ${currentKm.toFixed(1)}km (${((currentKm/challenge.goal)*100).toFixed(0)}%)\n`;
-            }
-
-            // ตรวจจับ pattern
-            if (stats7 && stats30) {
-              const weeklyAvg30 = stats30.totalDistance / 4;
-              const weekly7 = stats7.totalDistance;
-              if (weekly7 < weeklyAvg30 * 0.7) {
-                userContext += `\n⚠️ สังเกตว่า: สัปดาห์นี้วิ่งน้อยกว่าค่าเฉลี่ยปกติ ${((1 - weekly7/weeklyAvg30)*100).toFixed(0)}%\n`;
-              } else if (weekly7 > weeklyAvg30 * 1.3) {
-                userContext += `\n⚠️ สังเกตว่า: สัปดาห์นี้วิ่งมากกว่าค่าเฉลี่ยปกติ ${((weekly7/weeklyAvg30 - 1)*100).toFixed(0)}%\n`;
-              }
-            }
-
-            userContext += `\n=== คำถามของ user ===\n${text}`;
-
-            const response = await analyzeWithClaude(userContext);
-            await pushMessage(userId, response);
+            await replyFlex(event.replyToken, buildUpdateNotificationFlex());
+            continue;
           }
+
+          if (text === "/today" || text === "สถิติวันนี้") {
+            const activities = await getActivitiesForUser(userId, 7);
+            const latest = activities[0];
+
+            if (!latest) {
+              await replyText(event.replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot ผลการวิ่งมาก่อนได้เลย 📸");
+              continue;
+            }
+
+            await replyFlex(event.replyToken, buildTodayStatsFlexMessage(latest));
+            continue;
+          }
+
+          if (text === "/summary" || text === "สรุปสัปดาห์") {
+            const activities = await getActivitiesForUser(userId, 7);
+            const stats = calcStatsFromActivities(activities);
+
+            if (!stats) {
+              await replyText(event.replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
+              continue;
+            }
+
+            await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
+            continue;
+          }
+
+          if (text === "/history" || text === "ประวัติล่าสุด") {
+            const activities = await getActivitiesForUser(userId, 30);
+            const carousel = buildCarouselMessage(activities);
+
+            if (!carousel) {
+              await replyText(event.replyToken, "ยังไม่มีประวัติการวิ่งครับ");
+              continue;
+            }
+
+            await replyFlex(event.replyToken, carousel);
+            continue;
+          }
+
+          await handleAIChat(userId, text, event.replyToken);
+          continue;
         }
-      }
-    } catch (err) {
-      console.error("Event error:", err.message);
-      console.error("Event error detail:", JSON.stringify(err.response?.data));
-    }
-  }
-});
 
-// ===== STRAVA OAUTH CALLBACK =====
-app.get("/strava/callback", async (req, res) => {
-  const { code, lineUserId } = req.query;
-  if (!code || !lineUserId) {
-    res.send("<h2>❌ ข้อมูลไม่ครบ กรุณาลองใหม่ค่ะ</h2>");
-    return;
-  }
-  try {
-    const tokenRes = await axios.post("https://www.strava.com/oauth/token", {
-      client_id: CONFIG.STRAVA_CLIENT_ID,
-      client_secret: CONFIG.STRAVA_CLIENT_SECRET,
-      code,
-      grant_type: "authorization_code",
-    });
-    stravaTokens[lineUserId] = {
-      access_token: tokenRes.data.access_token,
-      refresh_token: tokenRes.data.refresh_token,
-      expires_at: tokenRes.data.expires_at,
-    };
-    // โหลด PR จาก Strava
-    const activitiesRes = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
-      headers: { Authorization: `Bearer ${tokenRes.data.access_token}` },
-      params: { per_page: 20 },
-    });
-    if (activitiesRes.data.length > 0) {
-      convertStravaToActivities(activitiesRes.data).forEach(a => checkPR(lineUserId, a));
-    }
-    await pushMessage(lineUserId, `✅ เชื่อม Strava สำเร็จแล้วค่ะ!\nยินดีต้อนรับ ${tokenRes.data.athlete.firstname} 🎉\n\nตอนนี้ Bot จะดึงข้อมูลจาก Strava อัตโนมัติเลยค่ะ 🏃\nพิมพ์ /disconnect ถ้าอยากยกเลิกการเชื่อมต่อนะคะ`);
-    res.send("<h2>✅ เชื่อม Strava สำเร็จแล้ว! กลับไปที่ LINE ได้เลยค่ะ</h2>");
-  } catch (err) {
-    console.error("Strava OAuth error:", err.message);
-    res.send("<h2>❌ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง</h2>");
-  }
-});
+        if (message.type === "image") {
+          const imageRes = await axios.get(
+            `https://api-data.line.me/v2/bot/message/${message.id}/content`,
+            {
+              headers: {
+                Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+              },
+              responseType: "arraybuffer",
+            }
+          );
 
-// ===== CRON: แจ้งเตือนทุกเช้าวันจันทร์ 8.00น. =====
-setInterval(async () => {
-  const now = new Date();
-  if (now.getDay() !== 1 || now.getHours() !== 8 || now.getMinutes() !== 0) return;
-  console.log("📬 ส่งสรุปประจำสัปดาห์...");
-  const allUsers = new Set([...Object.keys(stravaTokens), ...Object.keys(userActivities)]);
-  for (const userId of allUsers) {
-    try {
-      const activities = await getActivitiesForUser(userId, 7);
-      const stats = calcStatsFromActivities(activities);
-      if (!stats) continue;
-      await pushMessage(userId, "🌅 สวัสดีตอนเช้าวันจันทร์ค่ะ! นี่คือสรุปสัปดาห์ที่แล้วค่ะ 💪");
-      const flex = buildStatsFlexMessage(stats, "สัปดาห์ที่ผ่านมา");
-      if (flex) await pushFlexMessage(userId, flex);
-      if (userChallenges[userId]) {
-        const allAct = await getActivitiesForUser(userId, 30);
-        const allStats = calcStatsFromActivities(allAct);
-        if (allStats) {
-          const challengeFlex = buildChallengeFlexMessage(userId, allStats.totalDistance);
-          if (challengeFlex) await pushFlexMessage(userId, challengeFlex);
+          const imageBase64 = Buffer.from(imageRes.data).toString("base64");
+
+          const analysis = await analyzeWithClaude(
+            "ช่วยอ่านผลการวิ่งจากรูปนี้ ดึง distance, pace, duration, calories, elevation, date แล้ววิเคราะห์เป็นภาษาไทย",
+            imageBase64
+          );
+
+          const activity = extractActivityFromResponse(analysis);
+
+          if (activity) {
+            await dbSaveActivity(userId, activity);
+            saveActivity(userId, activity);
+
+            const prs = checkPR(userId, activity);
+
+            const cleanText = analysis.replace(/\{[\s\S]*?\}/, "").trim();
+
+            await saveConversation(userId, "user", "[ส่งรูปผลการวิ่ง]");
+            await saveConversation(userId, "assistant", cleanText);
+
+            const replies = [
+              {
+                type: "text",
+                text: cleanText || "อาจารย์อ่านผลการวิ่งให้แล้วครับ 💪",
+              },
+              buildTodayStatsFlexMessage(activity),
+            ];
+
+            if (prs) {
+              replies.push(buildPRFlexMessage(prs, activity.name || "ผลการวิ่งล่าสุด"));
+            }
+
+            await replyMessage(event.replyToken, replies);
+          } else {
+            await replyText(
+              event.replyToken,
+              "อาจารย์ยังอ่านค่าสถิติจากรูปนี้ไม่ชัดครับ ลองส่ง screenshot ที่เห็นระยะ/pace/เวลา ชัด ๆ อีกครั้งนะครับ 📸"
+            );
+          }
+
+          continue;
+        }
+
+        if (message.type === "file") {
+          const fileName = message.fileName || "";
+
+          if (!fileName.toLowerCase().endsWith(".gpx")) {
+            await replyText(
+              event.replyToken,
+              "ตอนนี้รองรับไฟล์ .gpx ครับ หรือส่งรูป screenshot ผลการวิ่งก็ได้ 📸"
+            );
+            continue;
+          }
+
+          const fileRes = await axios.get(
+            `https://api-data.line.me/v2/bot/message/${message.id}/content`,
+            {
+              headers: {
+                Authorization: `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`,
+              },
+              responseType: "text",
+            }
+          );
+
+          const gpxData = parseGPX(fileRes.data);
+
+          if (!gpxData) {
+            await replyText(event.replyToken, "อ่านไฟล์ GPX ไม่ได้ครับ ลองส่งไฟล์ใหม่อีกครั้งนะครับ");
+            continue;
+          }
+
+          await dbSaveActivity(userId, gpxData);
+          saveActivity(userId, gpxData);
+
+          const prs = checkPR(userId, gpxData);
+
+          const analysis = await analyzeWithClaude(`
+วิเคราะห์การวิ่งนี้:
+ระยะ ${gpxData.distance} km
+pace ${paceDecimalToText(gpxData.pace)} /km
+เวลา ${durationMinToText(gpxData.duration)}
+elevation ${gpxData.elevGain} m
+
+ตอบเป็นภาษาไทยแบบอาจารย์นักวิ่ง AI
+`);
+
+          await saveConversation(userId, "user", "[ส่งไฟล์ GPX]");
+          await saveConversation(userId, "assistant", analysis);
+
+          const replies = [
+            {
+              type: "text",
+              text: analysis,
+            },
+            buildTodayStatsFlexMessage(gpxData),
+          ];
+
+          if (prs) {
+            replies.push(buildPRFlexMessage(prs, "GPX Run"));
+          }
+
+          await replyMessage(event.replyToken, replies);
+          continue;
         }
       }
     } catch (e) {
-      console.error("Cron error:", e.message);
+      console.error("Webhook error:", e);
+
+      try {
+        if (event.replyToken) {
+          await replyText(
+            event.replyToken,
+            "ขอโทษครับ ระบบมีปัญหาชั่วคราว ลองใหม่อีกครั้งนะครับ"
+          );
+        }
+      } catch (_) {}
     }
   }
-}, 60000);
-
-// ===== START SERVER =====
-app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log(`🚀 Bot running on port ${process.env.PORT || 3000}`);
 });
+
+// ===== HEALTH CHECK =====
+app.get("/", (req, res) => {
+  res.send("AI Running Coach LINE Bot is running ✅");
+});
+
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "ai-running-coach-line-bot",
+    time: new Date().toISOString(),
+  });
+});
+
+// ===== SERVER START =====
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
+
