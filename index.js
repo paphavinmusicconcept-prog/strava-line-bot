@@ -2279,7 +2279,7 @@ function weightTrainingQuickReply(options) { return makeQuickReply(options.map(o
     return true;
   }
 
-  if (action === "weight_training") {
+  if (action && action.startsWith("wt_")) { return handleWeightTrainingPostback(userId, action, replyToken); } if (action === "weight_training") { await startWeightTrainingFlow(userId, replyToken); return true; } if (false) {
     await handleAIChat(userId, "ช่วยแนะนำ recovery และ weight training จากข้อมูลการวิ่งล่าสุดของผม", replyToken);
     return true;
   }
@@ -2372,7 +2372,7 @@ app.post("/webhook", async (req, res) => {
 
         if (message.type === "text") {
           const text = message.text.trim();
-          const action = normalizeMenuAction(text);
+          if (await handleWeightTrainingText(userId, text, event.replyToken)) { continue; } const action = normalizeMenuAction(text);
 
           if (action) {
             logger.info("LINE menu text received", {
