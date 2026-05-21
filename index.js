@@ -2179,7 +2179,7 @@ app.post("/webhook", async (req, res) => {
       if (event.type === "postback") {
         const data = event.postback?.data || "";
 
-        if (data === "action=today_stats") {
+        if (data === "action=today" || data === "action=today_stats") {
           const activities = await getActivitiesForUser(userId, 7);
           const latest = activities[0];
 
@@ -2197,7 +2197,7 @@ app.post("/webhook", async (req, res) => {
           continue;
         }
 
-        if (data === "action=weekly_summary") {
+        if (data === "action=week" || data === "action=weekly_summary") {
           const activities = await getActivitiesForUser(userId, 7);
           const stats = calcStatsFromActivities(activities);
 
