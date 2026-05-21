@@ -1245,19 +1245,29 @@ function formatActivityDateLabel(activity = {}) {
   });
 }
 
-function buildMetricPill(label, value, accentColor = "#E8703A") {
+function metricValueSize(value) {
+  const length = String(value || "-").length;
+  if (length >= 8) return "sm";
+  if (length >= 5) return "md";
+  return "lg";
+}
+
+function buildMetricPill(label, value, accentColor = "#E8703A", options = {}) {
+  const valueText = String(value || "-");
+
   return {
     type: "box",
     layout: "vertical",
-    flex: 1,
-    paddingAll: "10px",
+    flex: options.flex || 1,
+    paddingAll: options.paddingAll || "10px",
     backgroundColor: "#F6F7FB",
     cornerRadius: "10px",
+    justifyContent: "center",
     contents: [
       {
         type: "text",
-        text: String(value || "-"),
-        size: "lg",
+        text: valueText,
+        size: options.valueSize || metricValueSize(valueText),
         weight: "bold",
         color: accentColor,
         align: "center",
@@ -1270,7 +1280,7 @@ function buildMetricPill(label, value, accentColor = "#E8703A") {
         color: "#667085",
         align: "center",
         margin: "xs",
-        maxLines: 1,
+        maxLines: 2,
       },
     ],
   };
@@ -1360,8 +1370,22 @@ function buildRunResultFlexMessage(activity = {}, analysisText = "", options = {
                   },
                 ],
               },
-              buildMetricPill("pace /km", pace || "-", "#111827"),
-              buildMetricPill("เวลา", duration || "-", "#111827"),
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 4,
+                spacing: "sm",
+                contents: [
+                  buildMetricPill("pace /km", pace || "-", "#111827", {
+                    paddingAll: "9px",
+                    valueSize: "md",
+                  }),
+                  buildMetricPill("เวลา", duration || "-", "#111827", {
+                    paddingAll: "9px",
+                    valueSize: "md",
+                  }),
+                ],
+              },
             ],
           },
           {
