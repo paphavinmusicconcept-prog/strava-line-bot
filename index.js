@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
@@ -287,6 +287,9 @@ async function dbGetUserProfile(userId) {
   }
 }
 
+const WORKFLOW_SESSION_MEMORY_TYPE = "workflow_session";
+const WORKFLOW_SESSION_TTL_MS = 30 * 60 * 1000;
+
 async function dbSaveUserMemory(userId, memory) {
   if (!memory || !memory.content) return;
 
@@ -324,9 +327,10 @@ async function dbGetUserMemories(userId, limit = 20) {
       `SELECT memory_type, content, importance, created_at
        FROM user_memory
        WHERE user_id = $1
+       AND memory_type <> $3
        ORDER BY importance DESC, created_at DESC
        LIMIT $2`,
-      [userId, limit]
+      [userId, limit, WORKFLOW_SESSION_MEMORY_TYPE]
     );
     return res.rows || [];
   } catch (e) {
@@ -335,7 +339,113 @@ async function dbGetUserMemories(userId, limit = 20) {
   }
 }
 
-const WORKFLOW_SESSION_MEMORY_TYPE = "workflow_session"; const WORKFLOW_SESSION_TTL_MS = 30 * 60 * 1000;  async function dbSaveUserMemory(userId, memory) {   if (!memory || !memory.content) return;    try {     await db.query(       `INSERT INTO user_memory (user_id, memory_type, content, importance)        VALUES ($1, $2, $3, $4)`,       [         userId,         memory.memory_type || "note",         String(memory.content).slice(0, 1000),         memory.importance || 1,       ]     );      await db.query(       `DELETE FROM user_memory        WHERE user_id = $1        AND id NOT IN (          SELECT id FROM user_memory          WHERE user_id = $1          ORDER BY importance DESC, created_at DESC          LIMIT 100        )`,       [userId]     );   } catch (e) {     console.error("dbSaveUserMemory error:", e.message);   } }  async function dbGetUserMemories(userId, limit = 20) {   try {     const res = await db.query(       `SELECT memory_type, content, importance, created_at        FROM user_memory        WHERE user_id = $1        AND memory_type <> $3        ORDER BY importance DESC, created_at DESC        LIMIT $2`,       [userId, limit, WORKFLOW_SESSION_MEMORY_TYPE]     );     return res.rows || [];   } catch (e) {     console.error("dbGetUserMemories error:", e.message);     return [];   } }  function isWorkflowSessionFresh(session) {   return !!(     session &&     session.flow &&     (!session.expiresAt || Number(session.expiresAt) > Date.now())   ); }  async function dbSaveWorkflowSession(userId, session) {   if (!userId || !session) return null;    const stored = {     ...session,     updatedAt: Date.now(),     expiresAt: Date.now() + WORKFLOW_SESSION_TTL_MS,   };    userSessions[userId] = stored;    try {     await db.query(       `DELETE FROM user_memory        WHERE user_id = $1 AND memory_type = $2`,       [userId, WORKFLOW_SESSION_MEMORY_TYPE]     );      await db.query(       `INSERT INTO user_memory (user_id, memory_type, content, importance)        VALUES ($1, $2, $3, $4)`,       [userId, WORKFLOW_SESSION_MEMORY_TYPE, JSON.stringify(stored), 0]     );   } catch (e) {     console.error("dbSaveWorkflowSession error:", e.message);   }    return stored; }  async function dbGetWorkflowSession(userId) {   if (!userId) return null;    if (isWorkflowSessionFresh(userSessions[userId])) {     return userSessions[userId];   }    try {     const res = await db.query(       `SELECT content        FROM user_memory        WHERE user_id = $1 AND memory_type = $2        ORDER BY created_at DESC        LIMIT 1`,       [userId, WORKFLOW_SESSION_MEMORY_TYPE]     );      if (res.rows.length === 0) {       delete userSessions[userId];       return null;     }      const session = JSON.parse(res.rows[0].content);     if (!isWorkflowSessionFresh(session)) {       await dbDeleteWorkflowSession(userId);       return null;     }      userSessions[userId] = session;     return session;   } catch (e) {     console.error("dbGetWorkflowSession error:", e.message);     return isWorkflowSessionFresh(userSessions[userId]) ? userSessions[userId] : null;   } }  async function dbDeleteWorkflowSession(userId) {   delete userSessions[userId];    try {     await db.query(       `DELETE FROM user_memory        WHERE user_id = $1 AND memory_type = $2`,       [userId, WORKFLOW_SESSION_MEMORY_TYPE]     );   } catch (e) {     console.error("dbDeleteWorkflowSession error:", e.message);   } }  async function dbGetLatestWeightTrainingFeedback(userId) {   try {     const res = await db.query(       `SELECT content        FROM user_memory        WHERE user_id = $1 AND memory_type = 'weight_training_feedback'        ORDER BY created_at DESC        LIMIT 1`,       [userId]     );      return res.rows[0]?.content || "";   } catch (e) {     console.error("dbGetLatestWeightTrainingFeedback error:", e.message);     return "";   } }   async function loadUserContext(userId) {
+function isWorkflowSessionFresh(session) {
+  return !!(
+    session &&
+    session.flow &&
+    (!session.expiresAt || Number(session.expiresAt) > Date.now())
+  );
+}
+
+async function dbSaveWorkflowSession(userId, session) {
+  if (!userId || !session) return null;
+
+  const stored = {
+    ...session,
+    updatedAt: Date.now(),
+    expiresAt: Date.now() + WORKFLOW_SESSION_TTL_MS,
+  };
+
+  userSessions[userId] = stored;
+
+  try {
+    await db.query(
+      `DELETE FROM user_memory
+       WHERE user_id = $1 AND memory_type = $2`,
+      [userId, WORKFLOW_SESSION_MEMORY_TYPE]
+    );
+
+    await db.query(
+      `INSERT INTO user_memory (user_id, memory_type, content, importance)
+       VALUES ($1, $2, $3, $4)`,
+      [userId, WORKFLOW_SESSION_MEMORY_TYPE, JSON.stringify(stored), 0]
+    );
+  } catch (e) {
+    console.error("dbSaveWorkflowSession error:", e.message);
+  }
+
+  return stored;
+}
+
+async function dbGetWorkflowSession(userId) {
+  if (!userId) return null;
+
+  if (isWorkflowSessionFresh(userSessions[userId])) {
+    return userSessions[userId];
+  }
+
+  try {
+    const res = await db.query(
+      `SELECT content
+       FROM user_memory
+       WHERE user_id = $1 AND memory_type = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [userId, WORKFLOW_SESSION_MEMORY_TYPE]
+    );
+
+    if (res.rows.length === 0) {
+      delete userSessions[userId];
+      return null;
+    }
+
+    const session = JSON.parse(res.rows[0].content);
+    if (!isWorkflowSessionFresh(session)) {
+      await dbDeleteWorkflowSession(userId);
+      return null;
+    }
+
+    userSessions[userId] = session;
+    return session;
+  } catch (e) {
+    console.error("dbGetWorkflowSession error:", e.message);
+    return isWorkflowSessionFresh(userSessions[userId]) ? userSessions[userId] : null;
+  }
+}
+
+async function dbDeleteWorkflowSession(userId) {
+  delete userSessions[userId];
+
+  try {
+    await db.query(
+      `DELETE FROM user_memory
+       WHERE user_id = $1 AND memory_type = $2`,
+      [userId, WORKFLOW_SESSION_MEMORY_TYPE]
+    );
+  } catch (e) {
+    console.error("dbDeleteWorkflowSession error:", e.message);
+  }
+}
+
+async function dbGetLatestWeightTrainingFeedback(userId) {
+  try {
+    const res = await db.query(
+      `SELECT content
+       FROM user_memory
+       WHERE user_id = $1 AND memory_type = 'weight_training_feedback'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [userId]
+    );
+
+    return res.rows[0]?.content || "";
+  } catch (e) {
+    console.error("dbGetLatestWeightTrainingFeedback error:", e.message);
+    return "";
+  }
+}
+
+async function loadUserContext(userId) {
   const [
     recent7,
     recent30,
@@ -1295,6 +1405,7 @@ function buildRunResultFlexMessage(activity = {}, analysisText = "", options = {
       : Math.round(distance * 60);
   const cadence = activity.cadence || estimateCadence(activity.pace);
   const elevGain = activity.elevGain || 0;
+  const hrZones = activity.hrZones || estimateHRZones(activity.pace);
   const source = options.source || activity.source || "Screenshot";
   const dateLabel = formatActivityDateLabel(activity);
   const title = options.title || "อ่านผลวิ่งเรียบร้อย";
@@ -1399,6 +1510,11 @@ function buildRunResultFlexMessage(activity = {}, analysisText = "", options = {
               buildMetricPill("kcal", calories, "#E8703A"),
               buildMetricPill("cadence", cadence, "#0F766E"),
               buildMetricPill("elev", `${elevGain}m`, "#2563EB"),
+              buildMetricPill(
+                "HR zone",
+                Object.entries(hrZones).sort((a, b) => b[1] - a[1])[0][0].toUpperCase(),
+                "#B91C1C"
+              ),
             ],
           },
           {
@@ -2281,6 +2397,488 @@ function weightTrainingQuickReply(options) { return makeQuickReply(options.map(o
 
   if (action && action.startsWith("wt_")) { return handleWeightTrainingPostback(userId, action, replyToken); } if (action === "weight_training") { await startWeightTrainingFlow(userId, replyToken); return true; } if (false) {
     await handleAIChat(userId, "ช่วยแนะนำ recovery และ weight training จากข้อมูลการวิ่งล่าสุดของผม", replyToken);
+    return true;
+  }
+
+  if (action === "today_recommendation") {
+    await handleAIChat(userId, "ช่วยแนะนำการซ้อมวันนี้จากสถิติล่าสุดของผม", replyToken);
+    return true;
+  }
+
+  return false;
+}
+
+function analyzeRunningLoadForWeightTraining(activities = [], feedbackText = "") {
+  const totalDistance = activities.reduce((sum, a) => sum + Number(a.distance || 0), 0);
+  const totalDuration = activities.reduce((sum, a) => sum + Number(a.duration || 0), 0);
+  const runCount = activities.length;
+  const longRun = activities.reduce((max, a) => Math.max(max, Number(a.distance || 0)), 0);
+  const hardRuns = activities.filter(a => Number(a.pace || 0) > 0 && Number(a.pace) < 5.75).length;
+  const tooHeavy = /too_heavy|หนักไป/i.test(feedbackText);
+  const tooLight = /too_light|เบาไป/i.test(feedbackText);
+
+  let level = "normal";
+  let intensity = "normal";
+  let note = "โหลดซ้อมปกติ เล่นเวทเสริมได้แบบคุมฟอร์ม";
+
+  if (totalDistance >= 35 || runCount >= 5 || hardRuns >= 2 || longRun >= 18 || tooHeavy) {
+    level = "high";
+    intensity = "lighter";
+    note = "ช่วงนี้โหลดวิ่งค่อนข้างสูง โปรแกรมเวทจะลด volume และเน้นกันเจ็บ";
+  } else if (totalDistance <= 12 && runCount <= 2 && tooLight) {
+    level = "fresh";
+    intensity = "heavier";
+    note = "โหลดวิ่งยังไม่สูงและ feedback ล่าสุดเบาไป เพิ่มแรงต้านได้เล็กน้อย";
+  } else if (totalDistance <= 12 && runCount <= 2) {
+    level = "fresh";
+    note = "โหลดวิ่งยังเบา เล่นเวทได้เต็มกว่าปกตินิดหน่อย";
+  }
+
+  return {
+    level,
+    intensity,
+    note,
+    totalDistance: Number(totalDistance.toFixed(1)),
+    totalDuration: Math.round(totalDuration),
+    runCount,
+    longRun: Number(longRun.toFixed(1)),
+    hardRuns,
+  };
+}
+
+function weightTrainingQuickReply(options) {
+  return makeQuickReply(options.map(option => ({
+    label: option.label,
+    text: option.text,
+  })));
+}
+
+async function startWeightTrainingFlow(userId, replyToken) {
+  const [activities, feedbackText] = await Promise.all([
+    getActivitiesForUser(userId, 7),
+    dbGetLatestWeightTrainingFeedback(userId),
+  ]);
+  const runningLoad = analyzeRunningLoadForWeightTraining(activities, feedbackText);
+
+  await dbSaveWorkflowSession(userId, {
+    flow: "weight_training",
+    step: "focus",
+    data: {
+      intensity: runningLoad.intensity,
+      runningLoad,
+      lastFeedback: feedbackText || "",
+    },
+  });
+
+  return replyText(
+    replyToken,
+    `วันนี้อยากเล่นเวทแบบไหนครับ\n${runningLoad.note}`,
+    weightTrainingQuickReply([
+      { label: "ขา", text: "ขา" },
+      { label: "core", text: "core" },
+      { label: "กันเจ็บ", text: "กันเจ็บ" },
+      { label: "full body", text: "full body" },
+    ])
+  );
+}
+
+async function getWeightTrainingSession(userId) {
+  const session = await dbGetWorkflowSession(userId);
+  if (!session || session.flow !== "weight_training") return null;
+  return session;
+}
+
+function matchWeightTrainingChoice(text, choices) {
+  const lower = String(text || "").trim().toLowerCase();
+  return choices.find(choice =>
+    lower === choice.key ||
+    lower === String(choice.label).toLowerCase() ||
+    lower === String(choice.text).toLowerCase()
+  );
+}
+
+function getWeightTrainingExercises(data = {}) {
+  const focus = data.focus || "full_body";
+  const equipment = data.equipment || "none";
+  const intensity = data.intensity || "normal";
+  const loadLevel = data.runningLoad?.level || "normal";
+  const reps = intensity === "lighter" ? "8-10" : intensity === "heavier" ? "12-15" : "10-12";
+  const sets = intensity === "lighter" || loadLevel === "high" ? "2" : intensity === "heavier" ? "4" : "3";
+  const equipmentNote = {
+    none: "bodyweight",
+    dumbbell: "dumbbell",
+    band: "resistance band",
+    gym: "gym machine/free weight",
+  }[equipment] || "bodyweight";
+
+  const templates = {
+    legs: ["Squat", "Reverse lunge", "Glute bridge", "Calf raise", "Single-leg RDL"],
+    core: ["Dead bug", "Plank", "Side plank", "Bird dog", "Pallof press"],
+    injury: ["Clamshell", "Glute bridge", "Single-leg balance", "Calf raise", "Hip airplane"],
+    full_body: ["Squat", "Push-up", "Dead bug", "Reverse lunge", "Glute bridge"],
+  };
+
+  return (templates[focus] || templates.full_body).map(name =>
+    `${name} - ${sets} sets x ${reps} reps (${equipmentNote})`
+  );
+}
+
+function buildWeightTrainingFlexMessage(data = {}) {
+  const focusLabel = {
+    legs: "ขา",
+    core: "core",
+    injury: "กันเจ็บ",
+    full_body: "full body",
+  }[data.focus] || "full body";
+  const equipmentLabel = {
+    none: "ไม่มีอุปกรณ์",
+    dumbbell: "ดัมเบล",
+    band: "ยางยืด",
+    gym: "ฟิตเนส",
+  }[data.equipment] || "ไม่มีอุปกรณ์";
+  const duration = data.duration || "20";
+  const runningLoad = data.runningLoad || {};
+  const exercises = getWeightTrainingExercises(data);
+
+  return {
+    type: "flex",
+    altText: "Weight Training",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          {
+            type: "text",
+            text: "Weight Training",
+            weight: "bold",
+            size: "xl",
+            color: "#111111",
+          },
+          {
+            type: "text",
+            text: `${focusLabel} | ${duration} นาที | ${equipmentLabel}`,
+            size: "sm",
+            color: "#666666",
+            wrap: true,
+          },
+          {
+            type: "text",
+            text: `โหลดวิ่ง 7 วัน: ${runningLoad.totalDistance || 0} km | ${runningLoad.note || "คุมฟอร์มเป็นหลัก"}`,
+            size: "xs",
+            color: "#0F766E",
+            wrap: true,
+          },
+          {
+            type: "separator",
+            margin: "md",
+          },
+          ...exercises.map(exercise => ({
+            type: "text",
+            text: exercise,
+            size: "sm",
+            color: "#333333",
+            wrap: true,
+          })),
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#06C755",
+            action: {
+              type: "postback",
+              label: "บันทึกว่าทำแล้ว",
+              data: "action=wt_done",
+            },
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            spacing: "sm",
+            contents: [
+              {
+                type: "button",
+                style: "secondary",
+                action: {
+                  type: "postback",
+                  label: "เบาลง",
+                  data: "action=wt_lighter",
+                },
+              },
+              {
+                type: "button",
+                style: "secondary",
+                action: {
+                  type: "postback",
+                  label: "หนักขึ้น",
+                  data: "action=wt_heavier",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
+async function sendWeightTrainingPlan(userId, replyToken) {
+  const session = await getWeightTrainingSession(userId);
+  if (!session) {
+    await startWeightTrainingFlow(userId, replyToken);
+    return true;
+  }
+
+  session.step = "plan_sent";
+  await dbSaveWorkflowSession(userId, session);
+  await replyFlex(replyToken, buildWeightTrainingFlexMessage(session.data));
+  return true;
+}
+
+async function handleWeightTrainingPostback(userId, action, replyToken) {
+  const session = await getWeightTrainingSession(userId);
+
+  if (action === "wt_done") {
+    const activeSession = session || {
+      flow: "weight_training",
+      step: "feedback",
+      data: {},
+    };
+    activeSession.step = "feedback";
+    await dbSaveWorkflowSession(userId, activeSession);
+
+    await replyText(
+      replyToken,
+      "บันทึกแล้วครับ วันนี้รู้สึกยังไง",
+      weightTrainingQuickReply([
+        { label: "เบาไป", text: "เบาไป" },
+        { label: "กำลังดี", text: "กำลังดี" },
+        { label: "หนักไป", text: "หนักไป" },
+      ])
+    );
+    return true;
+  }
+
+  if (action === "wt_lighter" || action === "wt_heavier") {
+    if (!session) {
+      await startWeightTrainingFlow(userId, replyToken);
+      return true;
+    }
+
+    session.data.intensity = action === "wt_lighter" ? "lighter" : "heavier";
+    await dbSaveWorkflowSession(userId, session);
+    await sendWeightTrainingPlan(userId, replyToken);
+    return true;
+  }
+
+  return false;
+}
+
+async function handleWeightTrainingText(userId, text, replyToken) {
+  const session = await getWeightTrainingSession(userId);
+  if (!session) return false;
+
+  if (session.step === "focus") {
+    const choice = matchWeightTrainingChoice(text, [
+      { key: "legs", label: "ขา", text: "ขา" },
+      { key: "core", label: "core", text: "core" },
+      { key: "injury", label: "กันเจ็บ", text: "กันเจ็บ" },
+      { key: "full_body", label: "full body", text: "full body" },
+    ]);
+
+    if (!choice) {
+      await startWeightTrainingFlow(userId, replyToken);
+      return true;
+    }
+
+    session.data.focus = choice.key;
+    session.step = "duration";
+    await dbSaveWorkflowSession(userId, session);
+    await replyText(
+      replyToken,
+      "มีเวลากี่นาทีครับ",
+      weightTrainingQuickReply([
+        { label: "10", text: "10" },
+        { label: "20", text: "20" },
+        { label: "30", text: "30" },
+      ])
+    );
+    return true;
+  }
+
+  if (session.step === "duration") {
+    const choice = matchWeightTrainingChoice(text, [
+      { key: "10", label: "10", text: "10" },
+      { key: "20", label: "20", text: "20" },
+      { key: "30", label: "30", text: "30" },
+    ]);
+
+    if (!choice) {
+      await replyText(
+        replyToken,
+        "เลือกเวลาสั้น ๆ ก่อนนะครับ",
+        weightTrainingQuickReply([
+          { label: "10", text: "10" },
+          { label: "20", text: "20" },
+          { label: "30", text: "30" },
+        ])
+      );
+      return true;
+    }
+
+    session.data.duration = choice.key;
+    session.step = "equipment";
+    await dbSaveWorkflowSession(userId, session);
+    await replyText(
+      replyToken,
+      "วันนี้มีอุปกรณ์อะไรบ้างครับ",
+      weightTrainingQuickReply([
+        { label: "ไม่มี", text: "ไม่มี" },
+        { label: "ดัมเบล", text: "ดัมเบล" },
+        { label: "ยางยืด", text: "ยางยืด" },
+        { label: "ฟิตเนส", text: "ฟิตเนส" },
+      ])
+    );
+    return true;
+  }
+
+  if (session.step === "equipment") {
+    const choice = matchWeightTrainingChoice(text, [
+      { key: "none", label: "ไม่มี", text: "ไม่มี" },
+      { key: "dumbbell", label: "ดัมเบล", text: "ดัมเบล" },
+      { key: "band", label: "ยางยืด", text: "ยางยืด" },
+      { key: "gym", label: "ฟิตเนส", text: "ฟิตเนส" },
+    ]);
+
+    if (!choice) {
+      await replyText(
+        replyToken,
+        "เลือกอุปกรณ์ก่อนนะครับ",
+        weightTrainingQuickReply([
+          { label: "ไม่มี", text: "ไม่มี" },
+          { label: "ดัมเบล", text: "ดัมเบล" },
+          { label: "ยางยืด", text: "ยางยืด" },
+          { label: "ฟิตเนส", text: "ฟิตเนส" },
+        ])
+      );
+      return true;
+    }
+
+    session.data.equipment = choice.key;
+    await dbSaveWorkflowSession(userId, session);
+    await sendWeightTrainingPlan(userId, replyToken);
+    return true;
+  }
+
+  if (session.step === "feedback") {
+    const choice = matchWeightTrainingChoice(text, [
+      { key: "too_light", label: "เบาไป", text: "เบาไป" },
+      { key: "good", label: "กำลังดี", text: "กำลังดี" },
+      { key: "too_heavy", label: "หนักไป", text: "หนักไป" },
+    ]);
+
+    if (!choice) {
+      await replyText(
+        replyToken,
+        "เลือกความรู้สึกหลังเล่นเวทหน่อยครับ",
+        weightTrainingQuickReply([
+          { label: "เบาไป", text: "เบาไป" },
+          { label: "กำลังดี", text: "กำลังดี" },
+          { label: "หนักไป", text: "หนักไป" },
+        ])
+      );
+      return true;
+    }
+
+    const data = session.data || {};
+    await dbSaveUserMemory(userId, {
+      memory_type: "weight_training_feedback",
+      content: `weight_training focus=${data.focus || "-"} duration=${data.duration || "-"} equipment=${data.equipment || "-"} intensity=${data.intensity || "normal"} load=${data.runningLoad?.level || "normal"} feedback=${choice.key}`,
+      importance: 2,
+    });
+
+    await dbDeleteWorkflowSession(userId);
+    await replyText(replyToken, "เก็บ feedback แล้วครับ ครั้งหน้าจะใช้ปรับโปรแกรมเวทให้เข้ากับตัวคุณมากขึ้น");
+    return true;
+  }
+
+  return false;
+}
+
+async function handleMenuAction(userId, action, replyToken) {
+  if (action === "update") {
+    await replyFlex(replyToken, buildUpdateNotificationFlex());
+    return true;
+  }
+
+  if (action === "today") {
+    const activities = await getActivitiesForUser(userId, 7);
+    const latest = activities[0];
+
+    if (!latest) {
+      await replyText(replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot หรือเชื่อม Strava ก่อนได้เลย");
+      return true;
+    }
+
+    await replyFlex(replyToken, buildTodayStatsFlexMessage(latest));
+    return true;
+  }
+
+  if (action === "week") {
+    const activities = await getActivitiesForUser(userId, 7);
+    const stats = calcStatsFromActivities(activities);
+
+    if (!stats) {
+      await replyText(replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
+      return true;
+    }
+
+    await replyFlex(replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
+    return true;
+  }
+
+  if (action === "history") {
+    const activities = await getActivitiesForUser(userId, 30);
+    const carousel = buildCarouselMessage(activities);
+
+    if (!carousel) {
+      await replyText(replyToken, "ยังไม่มีประวัติการวิ่งครับ");
+      return true;
+    }
+
+    await replyFlex(replyToken, carousel);
+    return true;
+  }
+
+  if (action === "goal") {
+    await replyText(replyToken, "ส่งเป้าหมายการวิ่งมาได้เลยครับ เช่น เดือนนี้ 80 km หรือ 10K ต่ำกว่า 60 นาที");
+    return true;
+  }
+
+  if (action === "chat") {
+    await replyText(replyToken, "ถามอาจารย์ได้เลยครับ เรื่องการซ้อม เป้าหมาย recovery หรือข้อมูลการวิ่งล่าสุด");
+    return true;
+  }
+
+  if (action === "plan") {
+    await handleAIChat(userId, "ช่วยสร้างตารางซ้อมจากข้อมูลการวิ่งล่าสุดของผม", replyToken);
+    return true;
+  }
+
+  if (action && action.startsWith("wt_")) {
+    return handleWeightTrainingPostback(userId, action, replyToken);
+  }
+
+  if (action === "weight_training") {
+    await startWeightTrainingFlow(userId, replyToken);
     return true;
   }
 
