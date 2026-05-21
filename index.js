@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
@@ -1187,6 +1187,215 @@ function buildTodayStatsFlexMessage(activity = {}) {
   };
 }
 
+function compactFlexText(value, fallback = "-", maxLength = 260) {
+  const text = String(value || fallback).replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1)}…`;
+}
+
+function formatActivityDateLabel(activity = {}) {
+  if (!activity.date) return "ผลการวิ่งล่าสุด";
+
+  const date = new Date(activity.date);
+  if (Number.isNaN(date.getTime())) return "ผลการวิ่งล่าสุด";
+
+  return date.toLocaleDateString("th-TH", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function buildMetricPill(label, value, accentColor = "#E8703A") {
+  return {
+    type: "box",
+    layout: "vertical",
+    flex: 1,
+    paddingAll: "10px",
+    backgroundColor: "#F6F7FB",
+    cornerRadius: "10px",
+    contents: [
+      {
+        type: "text",
+        text: String(value || "-"),
+        size: "lg",
+        weight: "bold",
+        color: accentColor,
+        align: "center",
+        maxLines: 1,
+      },
+      {
+        type: "text",
+        text: label,
+        size: "xxs",
+        color: "#667085",
+        align: "center",
+        margin: "xs",
+        maxLines: 1,
+      },
+    ],
+  };
+}
+
+function buildRunResultFlexMessage(activity = {}, analysisText = "", options = {}) {
+  const distance = Number(activity.distance || 0);
+  const pace = activity.paceText || paceDecimalToText(activity.pace);
+  const duration = activity.durationText || durationMinToText(activity.duration);
+  const calories =
+    activity.calories && activity.calories > 0
+      ? Math.round(activity.calories)
+      : Math.round(distance * 60);
+  const cadence = activity.cadence || estimateCadence(activity.pace);
+  const elevGain = activity.elevGain || 0;
+  const source = options.source || activity.source || "Screenshot";
+  const dateLabel = formatActivityDateLabel(activity);
+  const title = options.title || "อ่านผลวิ่งเรียบร้อย";
+  const insight = compactFlexText(
+    analysisText,
+    "อาจารย์อ่านผลวิ่งให้แล้วครับ เก็บสถิติรอบนี้ไว้เรียบร้อย",
+    300
+  );
+  const distanceText = distance > 0 ? distance.toFixed(2) : "-";
+  const altPace = pace && pace !== "-" ? ` pace ${pace}/km` : "";
+
+  return {
+    type: "flex",
+    altText: `🏃 ${title}: ${distanceText} km${altPace}`,
+    contents: {
+      type: "bubble",
+      size: "mega",
+      header: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "18px",
+        backgroundColor: "#111827",
+        contents: [
+          {
+            type: "text",
+            text: title,
+            size: "lg",
+            weight: "bold",
+            color: "#FFFFFF",
+            maxLines: 1,
+          },
+          {
+            type: "text",
+            text: `${source} • ${dateLabel}`,
+            size: "xs",
+            color: "#D1D5DB",
+            margin: "xs",
+            maxLines: 1,
+          },
+        ],
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "18px",
+        spacing: "md",
+        contents: [
+          {
+            type: "box",
+            layout: "horizontal",
+            spacing: "md",
+            contents: [
+              {
+                type: "box",
+                layout: "vertical",
+                flex: 5,
+                contents: [
+                  {
+                    type: "text",
+                    text: distanceText,
+                    size: "4xl",
+                    weight: "bold",
+                    color: "#E8703A",
+                    maxLines: 1,
+                  },
+                  {
+                    type: "text",
+                    text: "กิโลเมตร",
+                    size: "xs",
+                    color: "#667085",
+                    margin: "xs",
+                  },
+                ],
+              },
+              buildMetricPill("pace /km", pace || "-", "#111827"),
+              buildMetricPill("เวลา", duration || "-", "#111827"),
+            ],
+          },
+          {
+            type: "separator",
+            margin: "md",
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            spacing: "sm",
+            contents: [
+              buildMetricPill("kcal", calories, "#E8703A"),
+              buildMetricPill("cadence", cadence, "#0F766E"),
+              buildMetricPill("elev", `${elevGain}m`, "#2563EB"),
+            ],
+          },
+          {
+            type: "box",
+            layout: "vertical",
+            paddingAll: "14px",
+            backgroundColor: "#FFF7ED",
+            cornerRadius: "10px",
+            contents: [
+              {
+                type: "text",
+                text: "AI insight",
+                size: "xs",
+                weight: "bold",
+                color: "#C2410C",
+              },
+              {
+                type: "text",
+                text: insight,
+                size: "sm",
+                color: "#43302B",
+                wrap: true,
+                margin: "xs",
+                maxLines: 5,
+              },
+            ],
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#06C755",
+            action: {
+              type: "postback",
+              label: "ขอคำแนะนำต่อ",
+              data: "action=today_recommendation",
+            },
+          },
+          {
+            type: "button",
+            style: "secondary",
+            action: {
+              type: "postback",
+              label: "ดูสรุปสัปดาห์",
+              data: "action=weekly_summary",
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 function buildStatsFlexMessage(stats, label) {
   if (!stats) return null;
 
@@ -2100,11 +2309,10 @@ app.post("/webhook", async (req, res) => {
             await saveConversation(userId, "assistant", cleanText);
 
             const replies = [
-              {
-                type: "text",
-                text: cleanText || "อาจารย์อ่านผลการวิ่งให้แล้วครับ 💪",
-              },
-              buildTodayStatsFlexMessage(activity),
+              buildRunResultFlexMessage(activity, cleanText, {
+                source: "Screenshot",
+                title: "อ่านผลวิ่งจากรูปแล้ว",
+              }),
             ];
 
             if (prs) {
@@ -2178,11 +2386,10 @@ elevation ${gpxData.elevGain} m
           await saveConversation(userId, "assistant", analysis);
 
           const replies = [
-            {
-              type: "text",
-              text: analysis,
-            },
-            buildTodayStatsFlexMessage(gpxData),
+            buildRunResultFlexMessage(gpxData, analysis, {
+              source: "GPX",
+              title: "อ่านไฟล์ GPX แล้ว",
+            }),
           ];
 
           if (prs) {
