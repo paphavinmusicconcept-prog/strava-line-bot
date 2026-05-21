@@ -2193,7 +2193,7 @@ function normalizeMenuAction(value = "") {
     "action=goal": "goal",
     "action=chat": "chat",
     "action=plan": "plan",
-    "action=recovery": "recovery",
+    "action=recovery": "weight_training",
     "action=today_recommendation": "today_recommendation",
     "/today": "today",
     "/summary": "week",
@@ -2279,7 +2279,7 @@ async function handleMenuAction(userId, action, replyToken) {
     return true;
   }
 
-  if (action === "recovery") {
+  if (action === "weight_training") {
     await handleAIChat(userId, "ช่วยแนะนำ recovery และ weight training จากข้อมูลการวิ่งล่าสุดของผม", replyToken);
     return true;
   }
