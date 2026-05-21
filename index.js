@@ -2119,6 +2119,117 @@ ${text}
   await replyText(replyToken, answer);
 }
 
+function normalizeMenuAction(value = "") {
+  const text = String(value).trim();
+  const lower = text.toLowerCase();
+
+  const aliases = {
+    "action=today": "today",
+    "action=today_stats": "today",
+    "action=week": "week",
+    "action=weekly_summary": "week",
+    "action=goal": "goal",
+    "action=chat": "chat",
+    "action=plan": "plan",
+    "action=recovery": "recovery",
+    "action=today_recommendation": "today_recommendation",
+    "/today": "today",
+    "/summary": "week",
+    "/history": "history",
+    "/update": "update",
+    "สถิติวันนี้": "today",
+    "สรุปสัปดาห์": "week",
+    "สรุปประจำสัปดาห์": "week",
+    "เป้าหมาย": "goal",
+    "ตารางซ้อม": "plan",
+    "ถามตอบอาจารย์นักวิ่ง": "chat",
+  };
+
+  if (aliases[lower]) return aliases[lower];
+
+  if (text.includes("สถิติวันนี้")) return "today";
+  if (text.includes("สรุป") && text.includes("สัปดาห์")) return "week";
+  if (text.includes("เป้าหมาย")) return "goal";
+  if (text.includes("ตารางซ้อม")) return "plan";
+  if (lower.includes("weight") || lower.includes("recovery") || text.includes("เวท")) return "recovery";
+  if (text.includes("ถามตอบ") || text.includes("ถามอาจารย์")) return "chat";
+
+  return null;
+}
+
+async function handleMenuAction(userId, action, replyToken) {
+  if (action === "update") {
+    await replyFlex(replyToken, buildUpdateNotificationFlex());
+    return true;
+  }
+
+  if (action === "today") {
+    const activities = await getActivitiesForUser(userId, 7);
+    const latest = activities[0];
+
+    if (!latest) {
+      await replyText(replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot หรือเชื่อม Strava ก่อนได้เลย");
+      return true;
+    }
+
+    await replyFlex(replyToken, buildTodayStatsFlexMessage(latest));
+    return true;
+  }
+
+  if (action === "week") {
+    const activities = await getActivitiesForUser(userId, 7);
+    const stats = calcStatsFromActivities(activities);
+
+    if (!stats) {
+      await replyText(replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
+      return true;
+    }
+
+    await replyFlex(replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
+    return true;
+  }
+
+  if (action === "history") {
+    const activities = await getActivitiesForUser(userId, 30);
+    const carousel = buildCarouselMessage(activities);
+
+    if (!carousel) {
+      await replyText(replyToken, "ยังไม่มีประวัติการวิ่งครับ");
+      return true;
+    }
+
+    await replyFlex(replyToken, carousel);
+    return true;
+  }
+
+  if (action === "goal") {
+    await replyText(replyToken, "ส่งเป้าหมายการวิ่งมาได้เลยครับ เช่น เดือนนี้ 80 km หรือ 10K ต่ำกว่า 60 นาที");
+    return true;
+  }
+
+  if (action === "chat") {
+    await replyText(replyToken, "ถามอาจารย์ได้เลยครับ เรื่องการซ้อม เป้าหมาย recovery หรือข้อมูลการวิ่งล่าสุด");
+    return true;
+  }
+
+  if (action === "plan") {
+    await handleAIChat(userId, "ช่วยสร้างตารางซ้อมจากข้อมูลการวิ่งล่าสุดของผม", replyToken);
+    return true;
+  }
+
+  if (action === "recovery") {
+    await handleAIChat(userId, "ช่วยแนะนำ recovery และ weight training จากข้อมูลการวิ่งล่าสุดของผม", replyToken);
+    return true;
+  }
+
+  if (action === "today_recommendation") {
+    await handleAIChat(userId, "ช่วยแนะนำการซ้อมวันนี้จากสถิติล่าสุดของผม", replyToken);
+    return true;
+  }
+
+  return false;
+}
+
 async function enforceEventRateLimit(userId, event) {
   if (event.type === "follow") return true;
 
@@ -2178,39 +2289,19 @@ app.post("/webhook", async (req, res) => {
 
       if (event.type === "postback") {
         const data = event.postback?.data || "";
+        const action = normalizeMenuAction(data);
 
-        if (data === "action=today" || data === "action=today_stats") {
-          const activities = await getActivitiesForUser(userId, 7);
-          const latest = activities[0];
+        logger.info("LINE postback received", {
+          userId,
+          data,
+          action,
+        });
 
-          if (!latest) {
-            await replyText(event.replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot หรือเชื่อม Strava ก่อนได้เลย");
-            continue;
-          }
-
-          await replyFlex(event.replyToken, buildTodayStatsFlexMessage(latest));
+        if (await handleMenuAction(userId, action, event.replyToken)) {
           continue;
         }
 
-        if (data === "action=goal") { await replyText(event.replyToken, "Send your running goal, for example: this month 80 km or 10K under 60 minutes."); continue; } if (data === "action=chat") { await replyText(event.replyToken, "Ask me anything about your run, training plan, recovery, or goals."); continue; } if (data === "action=plan") { await handleAIChat(userId, "Please create a running training plan from my latest data.", event.replyToken); continue; } if (data === "action=recovery") { await handleAIChat(userId, "Please suggest recovery and strength training from my latest running data.", event.replyToken); continue; } if (data === "action=today_recommendation") {
-          await handleAIChat(userId, "ช่วยแนะนำการซ้อมวันนี้จากสถิติล่าสุดของผม", event.replyToken);
-          continue;
-        }
-
-        if (data === "action=week" || data === "action=weekly_summary") {
-          const activities = await getActivitiesForUser(userId, 7);
-          const stats = calcStatsFromActivities(activities);
-
-          if (!stats) {
-            await replyText(event.replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
-            continue;
-          }
-
-          await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
-          continue;
-        }
-
-        await handleAIChat(userId, `User กดเมนู: ${data}`, event.replyToken);
+        await replyText(event.replyToken, "ยังไม่รู้จักเมนูนี้ครับ ลองกดเมนูอื่นหรือพิมพ์ถามอาจารย์ได้เลย");
         continue;
       }
 
@@ -2219,48 +2310,16 @@ app.post("/webhook", async (req, res) => {
 
         if (message.type === "text") {
           const text = message.text.trim();
+          const action = normalizeMenuAction(text);
 
-          if (text === "/update") {
-            await replyFlex(event.replyToken, buildUpdateNotificationFlex());
-            continue;
-          }
+          if (action) {
+            logger.info("LINE menu text received", {
+              userId,
+              text,
+              action,
+            });
 
-          if (text === "/today" || text === "สถิติวันนี้") {
-            const activities = await getActivitiesForUser(userId, 7);
-            const latest = activities[0];
-
-            if (!latest) {
-              await replyText(event.replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot ผลการวิ่งมาก่อนได้เลย 📸");
-              continue;
-            }
-
-            await replyFlex(event.replyToken, buildTodayStatsFlexMessage(latest));
-            continue;
-          }
-
-          if (text === "/summary" || text === "สรุปสัปดาห์") {
-            const activities = await getActivitiesForUser(userId, 7);
-            const stats = calcStatsFromActivities(activities);
-
-            if (!stats) {
-              await replyText(event.replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
-              continue;
-            }
-
-            await replyFlex(event.replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
-            continue;
-          }
-
-          if (text === "/history" || text === "ประวัติล่าสุด") {
-            const activities = await getActivitiesForUser(userId, 30);
-            const carousel = buildCarouselMessage(activities);
-
-            if (!carousel) {
-              await replyText(event.replyToken, "ยังไม่มีประวัติการวิ่งครับ");
-              continue;
-            }
-
-            await replyFlex(event.replyToken, carousel);
+            await handleMenuAction(userId, action, event.replyToken);
             continue;
           }
 
