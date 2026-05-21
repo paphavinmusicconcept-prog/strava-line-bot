@@ -35,7 +35,7 @@ includesAll(indexSource, [
 
 includesAll(indexSource, [
   "const hrZones = activity.hrZones || estimateHRZones(activity.pace)",
-  "buildMetricPill(\n                \"HR zone\"",
+  "...buildHRZoneBar(hrZones)",
   "buildRunResultFlexMessage(activity, cleanText",
   "buildRunResultFlexMessage(gpxData, analysis",
 ]);
