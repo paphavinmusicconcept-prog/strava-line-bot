@@ -1510,13 +1510,13 @@ function buildRunResultFlexMessage(activity = {}, analysisText = "", options = {
               buildMetricPill("kcal", calories, "#E8703A"),
               buildMetricPill("cadence", cadence, "#0F766E"),
               buildMetricPill("elev", `${elevGain}m`, "#2563EB"),
-              buildMetricPill(
-                "HR zone",
-                Object.entries(hrZones).sort((a, b) => b[1] - a[1])[0][0].toUpperCase(),
-                "#B91C1C"
-              ),
             ],
           },
+          {
+            type: "separator",
+            margin: "sm",
+          },
+          ...buildHRZoneBar(hrZones),
           {
             type: "box",
             layout: "vertical",
