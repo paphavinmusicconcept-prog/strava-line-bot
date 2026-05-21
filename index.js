@@ -1193,6 +1193,45 @@ function compactFlexText(value, fallback = "-", maxLength = 260) {
   return `${text.slice(0, maxLength - 1)}…`;
 }
 
+function stripJsonBlocks(value = "") {
+  return String(value)
+    .replace(/```(?:json)?[\s\S]*?```/gi, "")
+    .replace(/\{[\s\S]*?\}/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildActivityInsightFallback(activity = {}) {
+  const distance = Number(activity.distance || 0);
+  const pace = activity.paceText || paceDecimalToText(activity.pace);
+  const duration = activity.durationText || durationMinToText(activity.duration);
+  const elevGain = Number(activity.elevGain || 0);
+
+  const parts = [];
+  if (distance > 0) parts.push(`วิ่ง ${distance.toFixed(2)} กิโลเมตร`);
+  if (pace && pace !== "-") parts.push(`pace เฉลี่ย ${pace}/km`);
+  if (duration && duration !== "-") parts.push(`ใช้เวลา ${duration}`);
+  if (elevGain > 0) parts.push(`ไต่ขึ้น ${Math.round(elevGain)} เมตร`);
+
+  if (parts.length === 0) {
+    return "อาจารย์อ่านผลวิ่งให้แล้วครับ เก็บสถิติรอบนี้ไว้เรียบร้อย";
+  }
+
+  return `${parts.join(" • ")} ภาพรวมทำได้ดีครับ ค่อย ๆ รักษาความสม่ำเสมอรอบถัดไป`;
+}
+
+function cleanAnalysisInsight(analysisText = "", activity = {}) {
+  const cleaned = stripJsonBlocks(analysisText)
+    .replace(/^[\s"“”'`.,:;!-]+|[\s"“”'`]+$/g, "")
+    .trim();
+
+  if (!cleaned || /"\s*distance\s*"/i.test(cleaned) || /[{}]/.test(cleaned)) {
+    return buildActivityInsightFallback(activity);
+  }
+
+  return cleaned;
+}
+
 function formatActivityDateLabel(activity = {}) {
   if (!activity.date) return "ผลการวิ่งล่าสุด";
 
@@ -1251,8 +1290,8 @@ function buildRunResultFlexMessage(activity = {}, analysisText = "", options = {
   const dateLabel = formatActivityDateLabel(activity);
   const title = options.title || "อ่านผลวิ่งเรียบร้อย";
   const insight = compactFlexText(
-    analysisText,
-    "อาจารย์อ่านผลวิ่งให้แล้วครับ เก็บสถิติรอบนี้ไว้เรียบร้อย",
+    cleanAnalysisInsight(analysisText, activity),
+    buildActivityInsightFallback(activity),
     300
   );
   const distanceText = distance > 0 ? distance.toFixed(2) : "-";
@@ -2439,6 +2478,8 @@ pace ${paceDecimalToText(gpxData.pace)} /km
 elevation ${gpxData.elevGain} m
 
 ตอบเป็นภาษาไทยแบบอาจารย์นักวิ่ง AI
+ตอบเป็นข้อความสั้น 1-2 ประโยคเท่านั้น
+ห้ามตอบ JSON ห้ามใส่ key/value และไม่ต้องทวนข้อมูลดิบทั้งหมด
 `);
 
           await saveConversation(userId, "user", "[ส่งไฟล์ GPX]");
