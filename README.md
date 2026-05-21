@@ -26,15 +26,15 @@ cp .env.example .env
 # แล้วแก้ไขค่าใน .env ให้ครบ
 ```
 
-### 3. Deploy ขึ้น Railway (ฟรี)
-1. ไปที่ railway.app → New Project → Deploy from GitHub
+### 3. Deploy ขึ้น Render
+1. ไปที่ render.com → New Web Service → Build and deploy from GitHub
 2. ใส่ Environment Variables จาก .env
-3. จะได้ URL เช่น https://xxx.railway.app
+3. จะได้ URL เช่น https://strava-line-bot.onrender.com
 
 ### 4. ตั้ง Webhook ใน LINE
 1. ไปที่ LINE Developers Console
 2. Messaging API → Webhook URL
-3. ใส่: `https://xxx.railway.app/webhook`
+3. ใส่: `https://strava-line-bot.onrender.com/webhook`
 4. กด Verify ✅
 
 ### 5. สร้าง Rich Menu
