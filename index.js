@@ -2192,7 +2192,7 @@ app.post("/webhook", async (req, res) => {
           continue;
         }
 
-        if (data === "action=today_recommendation") {
+        if (data === "action=goal") { await replyText(event.replyToken, "Send your running goal, for example: this month 80 km or 10K under 60 minutes."); continue; } if (data === "action=chat") { await replyText(event.replyToken, "Ask me anything about your run, training plan, recovery, or goals."); continue; } if (data === "action=plan") { await handleAIChat(userId, "Please create a running training plan from my latest data.", event.replyToken); continue; } if (data === "action=recovery") { await handleAIChat(userId, "Please suggest recovery and strength training from my latest running data.", event.replyToken); continue; } if (data === "action=today_recommendation") {
           await handleAIChat(userId, "ช่วยแนะนำการซ้อมวันนี้จากสถิติล่าสุดของผม", event.replyToken);
           continue;
         }
