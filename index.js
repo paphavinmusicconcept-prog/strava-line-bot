@@ -2309,7 +2309,7 @@ function normalizeMenuAction(value = "") {
     "action=goal": "goal",
     "action=chat": "chat",
     "action=plan": "plan",
-    "action=recovery": "weight_training",
+    "action=recovery": "weight_training",    "action=strength": "weight_training",    "action=weight_training": "weight_training",    "action=weight": "weight_training",    "action=strength": "weight_training",
     "action=today_recommendation": "today_recommendation", "action=wt_done": "wt_done", "action=wt_lighter": "wt_lighter", "action=wt_heavier": "wt_heavier",
     "/today": "today",
     "/summary": "week",
