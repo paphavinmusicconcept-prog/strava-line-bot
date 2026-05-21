@@ -1,4 +1,12 @@
 function createLineService({ axios, channelAccessToken, logger, withRetry }) {
+  function lineErrorMeta(error) {
+    return {
+      error: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+    };
+  }
+
   function makeQuickReply(items) {
     return {
       items: items.map(i => ({
@@ -43,27 +51,32 @@ function createLineService({ axios, channelAccessToken, logger, withRetry }) {
   }
 
   async function replyMessage(replyToken, messages) {
-    await withRetry(
-      () => axios.post(
-        "https://api.line.me/v2/bot/message/reply",
-        {
-          replyToken,
-          messages: Array.isArray(messages) ? messages : [messages],
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${channelAccessToken}`,
+    try {
+      await withRetry(
+        () => axios.post(
+          "https://api.line.me/v2/bot/message/reply",
+          {
+            replyToken,
+            messages: Array.isArray(messages) ? messages : [messages],
           },
-          timeout: 10000,
+          {
+            headers: {
+              Authorization: `Bearer ${channelAccessToken}`,
+            },
+            timeout: 10000,
+          }
+        ),
+        {
+          onRetry: (error, meta) => logger.warn("Retrying LINE reply message", {
+            ...lineErrorMeta(error),
+            ...meta,
+          }),
         }
-      ),
-      {
-        onRetry: (error, meta) => logger.warn("Retrying LINE reply message", {
-          error: error.message,
-          ...meta,
-        }),
-      }
-    );
+      );
+    } catch (error) {
+      logger.error("LINE reply message failed", lineErrorMeta(error));
+      throw error;
+    }
   }
 
   async function pushFlexMessage(userId, flexContent) {

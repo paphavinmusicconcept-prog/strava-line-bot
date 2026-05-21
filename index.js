@@ -1262,7 +1262,6 @@ function buildMetricPill(label, value, accentColor = "#E8703A", options = {}) {
     paddingAll: options.paddingAll || "10px",
     backgroundColor: "#F6F7FB",
     cornerRadius: "10px",
-    justifyContent: "center",
     contents: [
       {
         type: "text",
@@ -1378,11 +1377,11 @@ function buildRunResultFlexMessage(activity = {}, analysisText = "", options = {
                 contents: [
                   buildMetricPill("pace /km", pace || "-", "#111827", {
                     paddingAll: "9px",
-                    valueSize: "md",
+                    valueSize: "sm",
                   }),
                   buildMetricPill("เวลา", duration || "-", "#111827", {
                     paddingAll: "9px",
-                    valueSize: "md",
+                    valueSize: "sm",
                   }),
                 ],
               },
@@ -2454,6 +2453,11 @@ app.post("/webhook", async (req, res) => {
 
         if (message.type === "file") {
           const fileName = message.fileName || "";
+          logger.info("LINE file received", {
+            userId,
+            fileName,
+            messageId: message.id,
+          });
 
           if (!fileName.toLowerCase().endsWith(".gpx")) {
             await replyText(
@@ -2485,9 +2489,21 @@ app.post("/webhook", async (req, res) => {
           const gpxData = parseGPX(fileRes.data);
 
           if (!gpxData) {
+            logger.warn("GPX parse returned no activity", {
+              userId,
+              fileName,
+            });
             await replyText(event.replyToken, "อ่านไฟล์ GPX ไม่ได้ครับ ลองส่งไฟล์ใหม่อีกครั้งนะครับ");
             continue;
           }
+
+          logger.info("GPX parsed successfully", {
+            userId,
+            fileName,
+            distance: gpxData.distance,
+            duration: gpxData.duration,
+            pace: gpxData.pace,
+          });
 
           await dbSaveActivity(userId, gpxData);
           saveActivity(userId, gpxData);
