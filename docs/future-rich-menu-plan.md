@@ -30,6 +30,47 @@ Rich Menu v1
 
 `Weight Training` ไม่อยู่เป็นช่องหลักใน v1 นี้ แต่ให้เข้าได้จาก `Today Coach` หรือ `Training Plan` เมื่อคำแนะนำบอกว่าควรเล่นเวท
 
+## Template Size And Bounds
+
+ใช้ template แบบใหญ่:
+
+```text
+Image size: 2500 x 1686 px
+Layout: 1 big top area + 3 bottom areas
+```
+
+ตำแหน่งกดที่ควรใช้:
+
+```text
+Today Coach
+x: 0
+y: 0
+width: 2500
+height: 843
+action: action=today_coach
+
+Stat
+x: 0
+y: 843
+width: 833
+height: 843
+action: action=stat
+
+Training Plan
+x: 833
+y: 843
+width: 834
+height: 843
+action: action=training_plan
+
+Profile Setting
+x: 1667
+y: 843
+width: 833
+height: 843
+action: action=profile_setting
+```
+
 ## 0. Today Coach
 
 ใช้เป็นปุ่มหลักของแอปสำหรับตอบคำถามว่า "วันนี้ควรทำอะไร"
