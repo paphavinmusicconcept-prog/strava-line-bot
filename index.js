@@ -2309,103 +2309,107 @@ function normalizeMenuAction(value = "") {
     "action=goal": "goal",
     "action=chat": "chat",
     "action=plan": "plan",
-    "action=recovery": "weight_training",    "action=strength": "weight_training",    "action=weight_training": "weight_training",    "action=weight": "weight_training",    "action=strength": "weight_training",
-    "action=today_recommendation": "today_recommendation", "action=wt_done": "wt_done", "action=wt_lighter": "wt_lighter", "action=wt_heavier": "wt_heavier",
+    "action=stat": "stat",
+    "action=stats": "stat",
+    "action=stats_today": "today",
+    "action=stats_week": "week",
+    "action=stats_month": "stats_month",
+    "action=stats_3m": "stats_3m",
+    "action=training_plan": "training_plan",
+    "action=plan_today": "plan_today",
+    "action=plan_week": "plan_week",
+    "action=goal_status": "goal_status",
+    "action=goal_update": "goal",
+    "action=today_coach": "today_coach",
+    "action=today_training": "today_training",
+    "action=rest_check": "rest_check",
+    "action=run_or_weight": "run_or_weight",
+    "action=adjust_plan": "adjust_plan",
+    "action=profile_setting": "profile_setting",
+    "action=profile_hr_zone": "profile_hr_zone",
+    "action=profile_view": "profile_view",
+    "action=profile_max_hr": "profile_max_hr",
+    "action=profile_resting_hr": "profile_resting_hr",
+    "action=recovery": "weight_training",
+    "action=strength": "weight_training",
+    "action=weight_training": "weight_training",
+    "action=weight": "weight_training",
+    "action=today_recommendation": "today_recommendation",
+    "action=wt_done": "wt_done",
+    "action=wt_lighter": "wt_lighter",
+    "action=wt_heavier": "wt_heavier",
     "/today": "today",
     "/summary": "week",
     "/history": "history",
     "/update": "update",
     "สถิติวันนี้": "today",
+    "stat": "stat",
+    "stats": "stat",
+    "สถิติ": "stat",
+    "วันนี้": "today",
     "สรุปสัปดาห์": "week",
     "สรุปประจำสัปดาห์": "week",
+    "สัปดาห์นี้": "week",
+    "เดือนนี้": "stats_month",
+    "3 เดือนล่าสุด": "stats_3m",
     "เป้าหมาย": "goal",
+    "เป้าหมายของฉัน": "goal_status",
+    "ปรับเป้าหมาย": "goal",
     "ตารางซ้อม": "plan",
+    "training plan": "training_plan",
+    "แผนซ้อม": "training_plan",
+    "แผนวันนี้": "plan_today",
+    "แผนสัปดาห์นี้": "plan_week",
+    "today coach": "today_coach",
+    "วันนี้ควรซ้อมอะไร": "today_training",
+    "ควรพักไหม": "rest_check",
+    "วิ่งเบาหรือเวทดี": "run_or_weight",
+    "ปรับแผนให้หน่อย": "adjust_plan",
+    "profile setting": "profile_setting",
+    "ตั้งค่าโปรไฟล์": "profile_setting",
+    "ตั้งค่า hr zone": "profile_hr_zone",
+    "ดูโปรไฟล์": "profile_view",
+    "แก้ max hr": "profile_max_hr",
+    "แก้ resting hr": "profile_resting_hr",
     "ถามตอบอาจารย์นักวิ่ง": "chat",
+    "วิเคราะห์ recovery": "weight_training",
+    "วิเคราะห์ recovery/strength": "weight_training",
+    "recovery/strength": "weight_training",
+    "weight training": "weight_training",
+    "เวท": "weight_training",
   };
 
   if (aliases[lower]) return aliases[lower];
 
+  if (lower.includes("today coach")) return "today_coach";
+  if (lower.includes("profile") || lower.includes("hr zone")) return "profile_setting";
   if (text.includes("สถิติวันนี้")) return "today";
+  if (text.includes("สถิติ")) return "stat";
   if (text.includes("สรุป") && text.includes("สัปดาห์")) return "week";
   if (text.includes("เป้าหมาย")) return "goal";
-  if (text.includes("ตารางซ้อม")) return "plan";
-  if (lower.includes("weight") || lower.includes("recovery") || text.includes("เวท")) return "weight_training";
+  if (text.includes("ตารางซ้อม") || text.includes("แผนซ้อม")) return "training_plan";
+  if (
+    lower.includes("weight") ||
+    lower.includes("strength") ||
+    lower.includes("recovery") ||
+    text.includes("เวท")
+  ) {
+    return "weight_training";
+  }
   if (text.includes("ถามตอบ") || text.includes("ถามอาจารย์")) return "chat";
 
   return null;
 }
 
-function weightTrainingQuickReply(options) { return makeQuickReply(options.map(option => ({ label: option.label, text: option.text, }))); } function startWeightTrainingFlow(userId, replyToken) { userSessions[userId] = { flow: "weight_training", step: "focus", data: { intensity: "normal", }, }; return replyText( replyToken, "\u0e27\u0e31\u0e19\u0e19\u0e35\u0e49\u0e2d\u0e22\u0e32\u0e01\u0e40\u0e25\u0e48\u0e19\u0e40\u0e27\u0e17\u0e41\u0e1a\u0e1a\u0e44\u0e2b\u0e19\u0e04\u0e23\u0e31\u0e1a", weightTrainingQuickReply([ { label: "\u0e02\u0e32", text: "\u0e02\u0e32" }, { label: "core", text: "core" }, { label: "\u0e01\u0e31\u0e19\u0e40\u0e08\u0e47\u0e1a", text: "\u0e01\u0e31\u0e19\u0e40\u0e08\u0e47\u0e1a" }, { label: "full body", text: "full body" }, ]) ); } function getWeightTrainingSession(userId) { const session = userSessions[userId]; if (!session || session.flow !== "weight_training") return null; return session; } function matchWeightTrainingChoice(text, choices) { const lower = String(text || "").trim().toLowerCase(); return choices.find(choice => lower === choice.key || lower === String(choice.label).toLowerCase() || lower === String(choice.text).toLowerCase() ); } function getWeightTrainingExercises(data = {}) { const focus = data.focus || "full_body"; const equipment = data.equipment || "none"; const intensity = data.intensity || "normal"; const reps = intensity === "lighter" ? "8-10" : intensity === "heavier" ? "12-15" : "10-12"; const sets = intensity === "lighter" ? "2" : intensity === "heavier" ? "4" : "3"; const equipmentNote = { none: "bodyweight", dumbbell: "dumbbell", band: "resistance band", gym: "gym machine/free weight", }[equipment] || "bodyweight"; const templates = { legs: ["Squat", "Reverse lunge", "Glute bridge", "Calf raise", "Single-leg RDL"], core: ["Dead bug", "Plank", "Side plank", "Bird dog", "Mountain climber"], injury: ["Clamshell", "Glute bridge", "Single-leg balance", "Calf raise", "Hip airplane"], full_body: ["Squat", "Push-up", "Dead bug", "Reverse lunge", "Glute bridge"], }; return (templates[focus] || templates.full_body).map(name => `${name} - ${sets} sets x ${reps} reps (${equipmentNote})` ); } function buildWeightTrainingFlexMessage(data = {}) { const focusLabel = { legs: "\u0e02\u0e32", core: "core", injury: "\u0e01\u0e31\u0e19\u0e40\u0e08\u0e47\u0e1a", full_body: "full body", }[data.focus] || "full body"; const equipmentLabel = { none: "\u0e44\u0e21\u0e48\u0e21\u0e35\u0e2d\u0e38\u0e1b\u0e01\u0e23\u0e13\u0e4c", dumbbell: "\u0e14\u0e31\u0e21\u0e40\u0e1a\u0e25", band: "\u0e22\u0e32\u0e07\u0e22\u0e37\u0e14", gym: "\u0e1f\u0e34\u0e15\u0e40\u0e19\u0e2a", }[data.equipment] || "\u0e44\u0e21\u0e48\u0e21\u0e35\u0e2d\u0e38\u0e1b\u0e01\u0e23\u0e13\u0e4c"; const duration = data.duration || "20"; const exercises = getWeightTrainingExercises(data); return { type: "flex", altText: "Weight Training", contents: { type: "bubble", body: { type: "box", layout: "vertical", spacing: "md", contents: [ { type: "text", text: "Weight Training", weight: "bold", size: "xl", color: "#111111", }, { type: "text", text: `${focusLabel} | ${duration} \u0e19\u0e32\u0e17\u0e35 | ${equipmentLabel}`, size: "sm", color: "#666666", wrap: true, }, { type: "separator", margin: "md", }, ...exercises.map(exercise => ({ type: "text", text: exercise, size: "sm", color: "#333333", wrap: true, })), ], }, footer: { type: "box", layout: "vertical", spacing: "sm", contents: [ { type: "button", style: "primary", color: "#06C755", action: { type: "postback", label: "\u0e1a\u0e31\u0e19\u0e17\u0e36\u0e01\u0e27\u0e48\u0e32\u0e17\u0e33\u0e41\u0e25\u0e49\u0e27", data: "action=wt_done", }, }, { type: "box", layout: "horizontal", spacing: "sm", contents: [ { type: "button", style: "secondary", action: { type: "postback", label: "\u0e40\u0e1a\u0e32\u0e25\u0e07", data: "action=wt_lighter", }, }, { type: "button", style: "secondary", action: { type: "postback", label: "\u0e2b\u0e19\u0e31\u0e01\u0e02\u0e36\u0e49\u0e19", data: "action=wt_heavier", }, }, ], }, ], }, }, }; } async function sendWeightTrainingPlan(userId, replyToken) { const session = getWeightTrainingSession(userId); if (!session) { await startWeightTrainingFlow(userId, replyToken); return true; } session.step = "plan_sent"; await replyFlex(replyToken, buildWeightTrainingFlexMessage(session.data)); return true; } async function handleWeightTrainingPostback(userId, action, replyToken) { const session = getWeightTrainingSession(userId); if (action === "wt_done") { const activeSession = session || { flow: "weight_training", step: "feedback", data: {}, }; activeSession.step = "feedback"; userSessions[userId] = activeSession; await replyText( replyToken, "\u0e1a\u0e31\u0e19\u0e17\u0e36\u0e01\u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a \u0e27\u0e31\u0e19\u0e19\u0e35\u0e49\u0e23\u0e39\u0e49\u0e2a\u0e36\u0e01\u0e22\u0e31\u0e07\u0e44\u0e07", weightTrainingQuickReply([ { label: "\u0e40\u0e1a\u0e32\u0e44\u0e1b", text: "\u0e40\u0e1a\u0e32\u0e44\u0e1b" }, { label: "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e14\u0e35", text: "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e14\u0e35" }, { label: "\u0e2b\u0e19\u0e31\u0e01\u0e44\u0e1b", text: "\u0e2b\u0e19\u0e31\u0e01\u0e44\u0e1b" }, ]) ); return true; } if (action === "wt_lighter" || action === "wt_heavier") { if (!session) { await startWeightTrainingFlow(userId, replyToken); return true; } session.data.intensity = action === "wt_lighter" ? "lighter" : "heavier"; await sendWeightTrainingPlan(userId, replyToken); return true; } return false; } async function handleWeightTrainingText(userId, text, replyToken) { const session = getWeightTrainingSession(userId); if (!session) return false; if (session.step === "focus") { const choice = matchWeightTrainingChoice(text, [ { key: "legs", label: "\u0e02\u0e32", text: "\u0e02\u0e32" }, { key: "core", label: "core", text: "core" }, { key: "injury", label: "\u0e01\u0e31\u0e19\u0e40\u0e08\u0e47\u0e1a", text: "\u0e01\u0e31\u0e19\u0e40\u0e08\u0e47\u0e1a" }, { key: "full_body", label: "full body", text: "full body" }, ]); if (!choice) { await startWeightTrainingFlow(userId, replyToken); return true; } session.data.focus = choice.key; session.step = "duration"; await replyText( replyToken, "\u0e21\u0e35\u0e40\u0e27\u0e25\u0e32\u0e01\u0e35\u0e48\u0e19\u0e32\u0e17\u0e35\u0e04\u0e23\u0e31\u0e1a", weightTrainingQuickReply([ { label: "10", text: "10" }, { label: "20", text: "20" }, { label: "30", text: "30" }, ]) ); return true; } if (session.step === "duration") { const choice = matchWeightTrainingChoice(text, [ { key: "10", label: "10", text: "10" }, { key: "20", label: "20", text: "20" }, { key: "30", label: "30", text: "30" }, ]); if (!choice) { await replyText( replyToken, "\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e40\u0e27\u0e25\u0e32\u0e2a\u0e31\u0e49\u0e19 \u0e46 \u0e01\u0e48\u0e2d\u0e19\u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a", weightTrainingQuickReply([ { label: "10", text: "10" }, { label: "20", text: "20" }, { label: "30", text: "30" }, ]) ); return true; } session.data.duration = choice.key; session.step = "equipment"; await replyText( replyToken, "\u0e27\u0e31\u0e19\u0e19\u0e35\u0e49\u0e21\u0e35\u0e2d\u0e38\u0e1b\u0e01\u0e23\u0e13\u0e4c\u0e2d\u0e30\u0e44\u0e23\u0e1a\u0e49\u0e32\u0e07\u0e04\u0e23\u0e31\u0e1a", weightTrainingQuickReply([ { label: "\u0e44\u0e21\u0e48\u0e21\u0e35", text: "\u0e44\u0e21\u0e48\u0e21\u0e35" }, { label: "\u0e14\u0e31\u0e21\u0e40\u0e1a\u0e25", text: "\u0e14\u0e31\u0e21\u0e40\u0e1a\u0e25" }, { label: "\u0e22\u0e32\u0e07\u0e22\u0e37\u0e14", text: "\u0e22\u0e32\u0e07\u0e22\u0e37\u0e14" }, { label: "\u0e1f\u0e34\u0e15\u0e40\u0e19\u0e2a", text: "\u0e1f\u0e34\u0e15\u0e40\u0e19\u0e2a" }, ]) ); return true; } if (session.step === "equipment") { const choice = matchWeightTrainingChoice(text, [ { key: "none", label: "\u0e44\u0e21\u0e48\u0e21\u0e35", text: "\u0e44\u0e21\u0e48\u0e21\u0e35" }, { key: "dumbbell", label: "\u0e14\u0e31\u0e21\u0e40\u0e1a\u0e25", text: "\u0e14\u0e31\u0e21\u0e40\u0e1a\u0e25" }, { key: "band", label: "\u0e22\u0e32\u0e07\u0e22\u0e37\u0e14", text: "\u0e22\u0e32\u0e07\u0e22\u0e37\u0e14" }, { key: "gym", label: "\u0e1f\u0e34\u0e15\u0e40\u0e19\u0e2a", text: "\u0e1f\u0e34\u0e15\u0e40\u0e19\u0e2a" }, ]); if (!choice) { await replyText( replyToken, "\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e2d\u0e38\u0e1b\u0e01\u0e23\u0e13\u0e4c\u0e01\u0e48\u0e2d\u0e19\u0e19\u0e30\u0e04\u0e23\u0e31\u0e1a", weightTrainingQuickReply([ { label: "\u0e44\u0e21\u0e48\u0e21\u0e35", text: "\u0e44\u0e21\u0e48\u0e21\u0e35" }, { label: "\u0e14\u0e31\u0e21\u0e40\u0e1a\u0e25", text: "\u0e14\u0e31\u0e21\u0e40\u0e1a\u0e25" }, { label: "\u0e22\u0e32\u0e07\u0e22\u0e37\u0e14", text: "\u0e22\u0e32\u0e07\u0e22\u0e37\u0e14" }, { label: "\u0e1f\u0e34\u0e15\u0e40\u0e19\u0e2a", text: "\u0e1f\u0e34\u0e15\u0e40\u0e19\u0e2a" }, ]) ); return true; } session.data.equipment = choice.key; await sendWeightTrainingPlan(userId, replyToken); return true; } if (session.step === "feedback") { const choice = matchWeightTrainingChoice(text, [ { key: "too_light", label: "\u0e40\u0e1a\u0e32\u0e44\u0e1b", text: "\u0e40\u0e1a\u0e32\u0e44\u0e1b" }, { key: "good", label: "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e14\u0e35", text: "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e14\u0e35" }, { key: "too_heavy", label: "\u0e2b\u0e19\u0e31\u0e01\u0e44\u0e1b", text: "\u0e2b\u0e19\u0e31\u0e01\u0e44\u0e1b" }, ]); if (!choice) { await replyText( replyToken, "\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e04\u0e27\u0e32\u0e21\u0e23\u0e39\u0e49\u0e2a\u0e36\u0e01\u0e2b\u0e25\u0e31\u0e07\u0e40\u0e25\u0e48\u0e19\u0e40\u0e27\u0e17\u0e2b\u0e19\u0e48\u0e2d\u0e22\u0e04\u0e23\u0e31\u0e1a", weightTrainingQuickReply([ { label: "\u0e40\u0e1a\u0e32\u0e44\u0e1b", text: "\u0e40\u0e1a\u0e32\u0e44\u0e1b" }, { label: "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e14\u0e35", text: "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e14\u0e35" }, { label: "\u0e2b\u0e19\u0e31\u0e01\u0e44\u0e1b", text: "\u0e2b\u0e19\u0e31\u0e01\u0e44\u0e1b" }, ]) ); return true; } const data = session.data || {}; await dbSaveUserMemory(userId, { memory_type: "weight_training_feedback", content: `weight_training focus=${data.focus || "-"} duration=${data.duration || "-"} equipment=${data.equipment || "-"} intensity=${data.intensity || "normal"} feedback=${choice.key}`, importance: 2, }); delete userSessions[userId]; await replyText(replyToken, "\u0e40\u0e01\u0e47\u0e1a feedback \u0e41\u0e25\u0e49\u0e27\u0e04\u0e23\u0e31\u0e1a \u0e04\u0e23\u0e31\u0e49\u0e07\u0e2b\u0e19\u0e49\u0e32\u0e08\u0e30\u0e43\u0e0a\u0e49\u0e1b\u0e23\u0e31\u0e1a\u0e42\u0e1b\u0e23\u0e41\u0e01\u0e23\u0e21\u0e40\u0e27\u0e17\u0e43\u0e2b\u0e49\u0e40\u0e02\u0e49\u0e32\u0e01\u0e31\u0e1a\u0e15\u0e31\u0e27\u0e04\u0e38\u0e13\u0e21\u0e32\u0e01\u0e02\u0e36\u0e49\u0e19"); return true; } return false; }  async function handleMenuAction(userId, action, replyToken) {
-  if (action === "update") {
-    await replyFlex(replyToken, buildUpdateNotificationFlex());
-    return true;
-  }
+function buildMenuQuickReply(options) {
+  return makeQuickReply(options.map(option => ({
+    label: option.label,
+    text: option.text,
+  })));
+}
 
-  if (action === "today") {
-    const activities = await getActivitiesForUser(userId, 7);
-    const latest = activities[0];
-
-    if (!latest) {
-      await replyText(replyToken, "ยังไม่มีข้อมูลการวิ่งล่าสุดครับ ส่ง screenshot หรือเชื่อม Strava ก่อนได้เลย");
-      return true;
-    }
-
-    await replyFlex(replyToken, buildTodayStatsFlexMessage(latest));
-    return true;
-  }
-
-  if (action === "week") {
-    const activities = await getActivitiesForUser(userId, 7);
-    const stats = calcStatsFromActivities(activities);
-
-    if (!stats) {
-      await replyText(replyToken, "ยังไม่มีข้อมูลสัปดาห์นี้ครับ");
-      return true;
-    }
-
-    await replyFlex(replyToken, buildStatsFlexMessage(stats, "สัปดาห์นี้"));
-    return true;
-  }
-
-  if (action === "history") {
-    const activities = await getActivitiesForUser(userId, 30);
-    const carousel = buildCarouselMessage(activities);
-
-    if (!carousel) {
-      await replyText(replyToken, "ยังไม่มีประวัติการวิ่งครับ");
-      return true;
-    }
-
-    await replyFlex(replyToken, carousel);
-    return true;
-  }
-
-  if (action === "goal") {
-    await replyText(replyToken, "ส่งเป้าหมายการวิ่งมาได้เลยครับ เช่น เดือนนี้ 80 km หรือ 10K ต่ำกว่า 60 นาที");
-    return true;
-  }
-
-  if (action === "chat") {
-    await replyText(replyToken, "ถามอาจารย์ได้เลยครับ เรื่องการซ้อม เป้าหมาย recovery หรือข้อมูลการวิ่งล่าสุด");
-    return true;
-  }
-
-  if (action === "plan") {
-    await handleAIChat(userId, "ช่วยสร้างตารางซ้อมจากข้อมูลการวิ่งล่าสุดของผม", replyToken);
-    return true;
-  }
-
-  if (action && action.startsWith("wt_")) { return handleWeightTrainingPostback(userId, action, replyToken); } if (action === "weight_training") { await startWeightTrainingFlow(userId, replyToken); return true; } if (false) {
-    await handleAIChat(userId, "ช่วยแนะนำ recovery และ weight training จากข้อมูลการวิ่งล่าสุดของผม", replyToken);
-    return true;
-  }
-
-  if (action === "today_recommendation") {
-    await handleAIChat(userId, "ช่วยแนะนำการซ้อมวันนี้จากสถิติล่าสุดของผม", replyToken);
-    return true;
-  }
-
-  return false;
+async function replyRichMenuQuickChoices(replyToken, title, options) {
+  await replyText(replyToken, title, buildMenuQuickReply(options));
 }
 
 function analyzeRunningLoadForWeightTraining(activities = [], feedbackText = "") {
@@ -2819,6 +2823,46 @@ async function handleMenuAction(userId, action, replyToken) {
     return true;
   }
 
+  if (action === "today_coach") {
+    await replyRichMenuQuickChoices(replyToken, "วันนี้อยากให้ coach ช่วยเรื่องไหนครับ", [
+      { label: "วันนี้ควรซ้อมอะไร", text: "วันนี้ควรซ้อมอะไร" },
+      { label: "ควรพักไหม", text: "ควรพักไหม" },
+      { label: "วิ่งเบาหรือเวทดี", text: "วิ่งเบาหรือเวทดี" },
+      { label: "ปรับแผนให้หน่อย", text: "ปรับแผนให้หน่อย" },
+    ]);
+    return true;
+  }
+
+  if (action === "stat") {
+    await replyRichMenuQuickChoices(replyToken, "อยากดูสถิติช่วงไหนครับ", [
+      { label: "วันนี้", text: "วันนี้" },
+      { label: "สัปดาห์นี้", text: "สัปดาห์นี้" },
+      { label: "เดือนนี้", text: "เดือนนี้" },
+      { label: "3 เดือนล่าสุด", text: "3 เดือนล่าสุด" },
+    ]);
+    return true;
+  }
+
+  if (action === "training_plan") {
+    await replyRichMenuQuickChoices(replyToken, "อยากดูแผนซ้อมหรือเป้าหมายส่วนไหนครับ", [
+      { label: "แผนวันนี้", text: "แผนวันนี้" },
+      { label: "แผนสัปดาห์นี้", text: "แผนสัปดาห์นี้" },
+      { label: "เป้าหมายของฉัน", text: "เป้าหมายของฉัน" },
+      { label: "ปรับเป้าหมาย", text: "ปรับเป้าหมาย" },
+    ]);
+    return true;
+  }
+
+  if (action === "profile_setting") {
+    await replyRichMenuQuickChoices(replyToken, "อยากตั้งค่าข้อมูลส่วนไหนครับ", [
+      { label: "ตั้งค่า HR Zone", text: "ตั้งค่า HR Zone" },
+      { label: "ดูโปรไฟล์", text: "ดูโปรไฟล์" },
+      { label: "แก้ Max HR", text: "แก้ Max HR" },
+      { label: "แก้ Resting HR", text: "แก้ Resting HR" },
+    ]);
+    return true;
+  }
+
   if (action === "today") {
     const activities = await getActivitiesForUser(userId, 7);
     const latest = activities[0];
@@ -2845,6 +2889,21 @@ async function handleMenuAction(userId, action, replyToken) {
     return true;
   }
 
+  if (action === "stats_month" || action === "stats_3m") {
+    const days = action === "stats_3m" ? 90 : 30;
+    const label = action === "stats_3m" ? "3 เดือนล่าสุด" : "เดือนนี้";
+    const activities = await getActivitiesForUser(userId, days);
+    const stats = calcStatsFromActivities(activities);
+
+    if (!stats) {
+      await replyText(replyToken, `ยังไม่มีข้อมูล${label}ครับ`);
+      return true;
+    }
+
+    await replyFlex(replyToken, buildStatsFlexMessage(stats, label));
+    return true;
+  }
+
   if (action === "history") {
     const activities = await getActivitiesForUser(userId, 30);
     const carousel = buildCarouselMessage(activities);
@@ -2863,6 +2922,20 @@ async function handleMenuAction(userId, action, replyToken) {
     return true;
   }
 
+  if (action === "goal_status") {
+    const challenge = await dbGetChallenge(userId);
+    if (!challenge) {
+      await replyText(replyToken, "ยังไม่มีเป้าหมายที่บันทึกไว้ครับ ส่งเป้าหมายมาได้เลย เช่น เดือนนี้ 80 km หรือ 10K ต่ำกว่า 60 นาที");
+      return true;
+    }
+
+    await replyText(
+      replyToken,
+      `เป้าหมายตอนนี้: ${challenge.goal || "-"} km\nDeadline: ${challenge.deadline || "-"}\nถ้าอยากปรับเป้าหมาย ส่งข้อความใหม่มาได้เลยครับ`
+    );
+    return true;
+  }
+
   if (action === "chat") {
     await replyText(replyToken, "ถามอาจารย์ได้เลยครับ เรื่องการซ้อม เป้าหมาย recovery หรือข้อมูลการวิ่งล่าสุด");
     return true;
@@ -2873,12 +2946,71 @@ async function handleMenuAction(userId, action, replyToken) {
     return true;
   }
 
+  if (action === "plan_today") {
+    await handleAIChat(userId, "ช่วยสรุปแผนซ้อมวันนี้จากข้อมูลล่าสุด เป้าหมาย และโหลดการวิ่งของผม", replyToken);
+    return true;
+  }
+
+  if (action === "plan_week") {
+    await handleAIChat(userId, "ช่วยสรุปแผนซ้อมสัปดาห์นี้จากข้อมูลล่าสุด เป้าหมาย และโหลดการวิ่งของผม", replyToken);
+    return true;
+  }
+
   if (action && action.startsWith("wt_")) {
     return handleWeightTrainingPostback(userId, action, replyToken);
   }
 
   if (action === "weight_training") {
     await startWeightTrainingFlow(userId, replyToken);
+    return true;
+  }
+
+  if (action === "today_training") {
+    await handleAIChat(userId, "วันนี้ผมควรซ้อมอะไรดี ช่วยดูจากผลวิ่งล่าสุด โหลดซ้อม recovery และเป้าหมายของผม", replyToken);
+    return true;
+  }
+
+  if (action === "rest_check") {
+    await handleAIChat(userId, "วันนี้ผมควรพักไหม ช่วยประเมินจากโหลดซ้อมล่าสุด recovery และข้อมูลการวิ่งของผม", replyToken);
+    return true;
+  }
+
+  if (action === "run_or_weight") {
+    await handleAIChat(userId, "วันนี้ผมควรวิ่งเบา เล่นเวท หรือพักดี ช่วยแนะนำจากโหลดซ้อมล่าสุด recovery และเป้าหมายของผม", replyToken);
+    return true;
+  }
+
+  if (action === "adjust_plan") {
+    await handleAIChat(userId, "ช่วยปรับแผนซ้อมวันนี้หรือสัปดาห์นี้ให้เหมาะกับสภาพล่าสุดของผม", replyToken);
+    return true;
+  }
+
+  if (action === "profile_hr_zone") {
+    await replyText(replyToken, "ส่งค่า Resting HR และ Max HR มาได้เลยครับ เช่น Resting HR 55, Max HR 185 เดี๋ยวผมช่วยจำไว้ใช้คำนวณ HR Zone");
+    return true;
+  }
+
+  if (action === "profile_view") {
+    const profile = await dbGetUserProfile(userId);
+    if (!profile) {
+      await replyText(replyToken, "ยังไม่มีโปรไฟล์ที่บันทึกไว้ครับ ส่งข้อมูล เช่น อายุ, Resting HR, Max HR, เป้าหมายการวิ่ง มาให้ผมจำได้เลย");
+      return true;
+    }
+
+    await replyText(
+      replyToken,
+      `โปรไฟล์ของคุณ\nGoal: ${profile.goal || "-"}\nTarget Distance: ${profile.target_distance || "-"} km\nTarget Pace: ${profile.target_pace || "-"}\nRunning Level: ${profile.running_level || "-"}`
+    );
+    return true;
+  }
+
+  if (action === "profile_max_hr") {
+    await replyText(replyToken, "ส่ง Max HR ใหม่มาได้เลยครับ เช่น Max HR 185");
+    return true;
+  }
+
+  if (action === "profile_resting_hr") {
+    await replyText(replyToken, "ส่ง Resting HR ใหม่มาได้เลยครับ เช่น Resting HR 55");
     return true;
   }
 
