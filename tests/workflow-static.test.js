@@ -27,11 +27,27 @@ includesAll(indexSource, [
   "async function startWeightTrainingFlow",
   "async function handleWeightTrainingPostback",
   "async function handleWeightTrainingText",
+  "\"action=today_coach\": \"today_coach\"",
+  "\"action=stat\": \"stat\"",
+  "\"action=training_plan\": \"training_plan\"",
+  "\"action=profile_setting\": \"profile_setting\"",
+  "if (action === \"today_coach\")",
+  "if (action === \"stat\")",
+  "if (action === \"training_plan\")",
+  "if (action === \"profile_setting\")",
+  "\"action=recovery\": \"weight_training\"",
+  "\"action=strength\": \"weight_training\"",
+  "\"วิเคราะห์ recovery/strength\": \"weight_training\"",
   "handleWeightTrainingText(userId, text, event.replyToken)",
   "handleWeightTrainingPostback(userId, action, replyToken)",
   "action=wt_done",
   "weight_training_feedback",
 ]);
+
+assert(
+  !indexSource.includes("ช่วยแนะนำ recovery และ weight training จากข้อมูลการวิ่งล่าสุดของผม"),
+  "Expected old recovery AI shortcut to be removed"
+);
 
 includesAll(indexSource, [
   "const hrZones = activity.hrZones || estimateHRZones(activity.pace)",
