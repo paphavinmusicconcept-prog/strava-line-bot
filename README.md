@@ -1,174 +1,99 @@
 # Strava Coach LINE Bot
 
-LINE bot for runners that connects running data, Strava, AI coaching, PostgreSQL memory, rich messages, and LINE Rich Menu workflows.
+โปรเจกต์นี้คือ LINE Bot สำหรับนักวิ่ง
 
-Production:
-- Render service: `strava-line-bot`
-- - App URL: `https://strava-line-bot.onrender.com`
-  - - Health check: `https://strava-line-bot.onrender.com/health`
-    - - LINE webhook: `https://strava-line-bot.onrender.com/webhook`
-     
-      - ## Current Features
-     
-      - - LINE webhook for text, image, file, follow, and postback events
-        - - Strava token storage and activity fetching
-          - - Screenshot and GPX running result analysis
-            - - Rich message run summaries with distance, pace, duration, calories, cadence, elevation, AI insight, and HR zone bar
-              - - Weekly and period stats summaries
-                - - DB-backed Weight Training workflow
-                  - - Weight training feedback memory for future personalization
-                    - - User memory and profile context in PostgreSQL
-                      - - Render production deployment
-                        - - Codex project instructions in `AGENTS.md`
-                         
-                          - ## Rich Menu v1
-                         
-                          - The next rich menu layout uses 4 main areas:
-                         
-                          - ```text
-                            [ Today Coach ]
+แอปนี้ช่วยอ่านผลวิ่ง สรุปสถิติ แนะนำการซ้อม และช่วยจัดโปรแกรมเวทให้เข้ากับข้อมูลการวิ่งของผู้ใช้
 
-                            [ Stat ] [ Training Plan ] [ Profile Setting ]
-                            ```
+## ภาพรวมแบบง่าย
 
-                            Recommended image size:
+ผู้ใช้คุยกับ bot ผ่าน LINE แล้ว bot จะช่วยตอบเรื่องการวิ่ง เช่น วันนี้ควรซ้อมอะไร ดูสถิติย้อนหลัง ตั้งค่า HR Zone หรือให้โปรแกรม Weight Training
 
-                            ```text
-                            2500 x 1686 px
-                            ```
+ระบบจริงตอนนี้รันอยู่บน Render และใช้ GitHub เป็นที่เก็บไฟล์หลักของโปรเจกต์
 
-                            Bounds:
+## เมนูหลักของแอป
 
-                            ```text
-                            Today Coach:     x 0,    y 0,   w 2500, h 843, action=today_coach
-                            Stat:            x 0,    y 843, w 833,  h 843, action=stat
-                            Training Plan:   x 833,  y 843, w 834,  h 843, action=training_plan
-                            Profile Setting: x 1667, y 843, w 833,  h 843, action=profile_setting
-                            ```
+| เมนู | ใช้ทำอะไร |
+| --- | --- |
+| Today Coach | ถามว่า วันนี้ควรซ้อมอะไร ควรพักไหม หรือควรเวทไหม |
+| Stat | ดูข้อมูลย้อนหลัง เช่น วันนี้ สัปดาห์นี้ เดือนนี้ และ 3 เดือนล่าสุด |
+| Training Plan | ดูแผนซ้อม เป้าหมาย และสิ่งที่ควรทำต่อ |
+| Profile Setting | ตั้งค่า HR Zone และข้อมูลส่วนตัว |
+| Weight Training | ให้ bot ถามเป็นขั้นตอน แล้วส่งโปรแกรมเวทให้ |
 
-                            Quick replies:
+## Rich Menu แบบใหม่
 
-                            - `Today Coach`: today training, rest check, run or weight, adjust plan
-                            - - `Stat`: today, this week, this month, last 3 months
-                              - - `Training Plan`: today's plan, this week's plan, goal status, update goal
-                                - - `Profile Setting`: HR Zone setup, view profile, edit Max HR, edit Resting HR
-                                 
-                                  - See `docs/future-rich-menu-plan.md` for the full plan.
-                                 
-                                  - ## Weight Training Workflow
-                                 
-                                  - Weight Training is a guided flow:
-                                 
-                                  - 1. Choose focus: legs, core, injury prevention, full body
-                                    2. 2. Choose duration: 10, 20, 30 minutes
-                                       3. 3. Choose equipment: none, dumbbell, band, gym
-                                          4. 4. Receive a rich message workout plan
-                                             5. 5. Tap done, lighter, or heavier
-                                                6. 6. After done, answer feedback: too light, good, too heavy
-                                                   7. 7. Feedback is saved for future personalization
-                                                     
-                                                      8. Workflow session state is stored in the database, not only server memory, so Render restarts are safer.
-                                                     
-                                                      9. ## Important Files
-                                                     
-                                                      10. - `AGENTS.md` - project rules and context for Codex across computers
-                                                          - - `index.js` - main LINE bot, workflows, rich messages, webhook handling
-                                                            - - `package.json` - scripts and dependencies
-                                                              - - `tests/workflow-static.test.js` - static workflow coverage
-                                                                - - `docs/future-rich-menu-plan.md` - rich menu v1 plan and bounds
-                                                                  - - `src/db/migrations.js` - database migrations
-                                                                    - - `src/security/tokenCrypto.js` - token encryption
-                                                                      - - `src/security/lineSignature.js` - LINE signature validation
-                                                                        - - `src/services/lineService.js` - LINE reply/push helpers
-                                                                         
-                                                                          - ## Environment Variables
-                                                                         
-                                                                          - Required production variables include:
-                                                                         
-                                                                          - - `LINE_CHANNEL_ACCESS_TOKEN`
-                                                                            - - `LINE_CHANNEL_SECRET`
-                                                                              - - `ANTHROPIC_API_KEY`
-                                                                                - - `DATABASE_URL`
-                                                                                  - - `TOKEN_ENCRYPTION_KEY`
-                                                                                   
-                                                                                    - Do not commit real secrets. `TOKEN_ENCRYPTION_KEY` is required in production so Strava tokens can be encrypted at rest.
-                                                                                   
-                                                                                    - ## Local Development
-                                                                                   
-                                                                                    - Install dependencies:
-                                                                                   
-                                                                                    - ```bash
-                                                                                      npm install
-                                                                                      ```
+แผน Rich Menu รอบถัดไปจะทำให้เมนูสะอาดขึ้น เหลือ 4 ช่องหลัก
 
-                                                                                      Run locally:
+```text
+[ Today Coach ]
 
-                                                                                      ```bash
-                                                                                      npm run dev
-                                                                                      ```
+[ Stat ] [ Training Plan ] [ Profile Setting ]
+```
 
-                                                                                      Run production command locally:
+ขนาดรูปที่ใช้คือ `2500 x 1686 px`
 
-                                                                                      ```bash
-                                                                                      npm start
-                                                                                      ```
+| ช่อง | action |
+| --- | --- |
+| Today Coach | `action=today_coach` |
+| Stat | `action=stat` |
+| Training Plan | `action=training_plan` |
+| Profile Setting | `action=profile_setting` |
 
-                                                                                      ## Testing
+รายละเอียดตำแหน่งกดของแต่ละช่องอยู่ใน `docs/future-rich-menu-plan.md`
 
-                                                                                      Syntax check:
+## Weight Training ทำงานยังไง
 
-                                                                                      ```bash
-                                                                                      node --check index.js
-                                                                                      ```
+Flow ปัจจุบันเป็นแบบถามทีละขั้น
 
-                                                                                      Workflow static tests:
+```text
+เลือกส่วนที่อยากเล่น
+เลือกเวลาที่มี
+เลือกอุปกรณ์
+bot ส่งโปรแกรมเวท
+กดบันทึกว่าทำแล้ว
+bot ถามว่าเบาไป กำลังดี หรือหนักไป
+bot เก็บ feedback ไว้ปรับครั้งต่อไป
+```
 
-                                                                                      ```bash
-                                                                                      npm test
-                                                                                      ```
+ข้อมูลระหว่างทำ flow นี้เก็บใน database แล้ว จึงไม่หายง่ายถ้า Render restart
 
-                                                                                      Production health check:
+## ระบบที่ใช้งานจริง
 
-                                                                                      ```text
-                                                                                      https://strava-line-bot.onrender.com/health
-                                                                                      ```
+| รายการ | ค่า |
+| --- | --- |
+| Render service | `strava-line-bot` |
+| App URL | `https://strava-line-bot.onrender.com` |
+| Health check | `https://strava-line-bot.onrender.com/health` |
+| LINE webhook | `https://strava-line-bot.onrender.com/webhook` |
 
-                                                                                      ## Deployment Notes
+## ไฟล์ที่ควรรู้จัก
 
-                                                                                      The app deploys from GitHub to Render.
+| ไฟล์ | ใช้ทำอะไร |
+| --- | --- |
+| `AGENTS.md` | context และกติกากลางให้ Codex อ่านก่อนทำงาน |
+| `README.md` | ภาพรวมโปรเจกต์แบบอ่านง่าย |
+| `index.js` | ไฟล์หลักของ bot |
+| `docs/future-rich-menu-plan.md` | แผน Rich Menu รุ่นถัดไป |
+| `tests/workflow-static.test.js` | test เช็ค workflow สำคัญ |
 
-                                                                                      After production-facing changes:
+## คำสั่งที่ใช้บ่อย
 
-                                                                                      1. Commit to GitHub main
-                                                                                      2. 2. Wait for Render auto-deploy to become live
-                                                                                         3. 3. Check `/health`
-                                                                                            4. 4. For LINE Rich Menu changes, verify the actual rich menu through LINE API or LINE Official Account Manager
-                                                                                              
-                                                                                               5. ## Working With Codex
-                                                                                              
-                                                                                               6. Before asking Codex to change the project, make sure the repo contains `AGENTS.md`. Codex should read:
-                                                                                              
-                                                                                               7. - `AGENTS.md`
-                                                                                                  - - `README.md`
-                                                                                                    - - Relevant docs
-                                                                                                      - - Relevant source files
-                                                                                                       
-                                                                                                        - Suggested prompt:
-                                                                                                       
-                                                                                                        - ```text
-                                                                                                          Read AGENTS.md, README.md, and relevant docs first.
+```bash
+npm install
+npm test
+node --check index.js
+```
 
-                                                                                                          Task:
-                                                                                                          [describe the task here]
+## ทำงานต่อจากหลายเครื่อง
 
-                                                                                                          Rules:
-                                                                                                          - Inspect relevant files before editing
-                                                                                                          - Do not rewrite the whole project
-                                                                                                          - Do not change unrelated files
-                                                                                                          - Make the smallest safe patch
-                                                                                                          - Preserve existing behavior unless I explicitly ask to change it
-                                                                                                          - Explain the cause before fixing if this is a bug
-                                                                                                          - After editing, summarize changed files
-                                                                                                          - Tell me how to test the result
-                                                                                                          ```
-                                                                                                          
+ถ้าเปิด repo นี้จากคอมบ้านหรือคอมที่ทำงาน ให้ Codex อ่าน `AGENTS.md` และ `README.md` ก่อนเสมอ
+
+สองไฟล์นี้คือ context กลางของโปรเจกต์ เพื่อให้ทุกเครื่องเข้าใจภาพเดียวกันและทำงานต่อเนื่องได้
+
+## สถานะล่าสุด
+
+ระบบหลักใช้งานได้แล้ว
+
+backend รองรับ Rich Menu 4 ช่องแล้ว
+
+ขั้นต่อไปคือทำรูป Rich Menu ใหม่ แล้วอัปโหลดเข้า LINE ตาม action ที่เตรียมไว้
