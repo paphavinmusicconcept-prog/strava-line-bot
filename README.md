@@ -1,73 +1,174 @@
-# 🏃 Strava Coach LINE Bot
+# Strava Coach LINE Bot
 
-LINE Bot เชื่อม Strava + วิเคราะห์ด้วย Claude AI
+LINE bot for runners that connects running data, Strava, AI coaching, PostgreSQL memory, rich messages, and LINE Rich Menu workflows.
 
----
+Production:
+- Render service: `strava-line-bot`
+- - App URL: `https://strava-line-bot.onrender.com`
+  - - Health check: `https://strava-line-bot.onrender.com/health`
+    - - LINE webhook: `https://strava-line-bot.onrender.com/webhook`
+     
+      - ## Current Features
+     
+      - - LINE webhook for text, image, file, follow, and postback events
+        - - Strava token storage and activity fetching
+          - - Screenshot and GPX running result analysis
+            - - Rich message run summaries with distance, pace, duration, calories, cadence, elevation, AI insight, and HR zone bar
+              - - Weekly and period stats summaries
+                - - DB-backed Weight Training workflow
+                  - - Weight training feedback memory for future personalization
+                    - - User memory and profile context in PostgreSQL
+                      - - Render production deployment
+                        - - Codex project instructions in `AGENTS.md`
+                         
+                          - ## Rich Menu v1
+                         
+                          - The next rich menu layout uses 4 main areas:
+                         
+                          - ```text
+                            [ Today Coach ]
 
-## Features
-- 🏃 ดูสถิติวันนี้ / สัปดาห์นี้
-- 🗓️ สร้างตารางซ้อมอัตโนมัติ
-- 📸 ส่งรูป Zepp → วิเคราะห์ Recovery
-- 🎯 ติดตามเป้าหมาย
-- 💬 ถามตอบอิสระ
+                            [ Stat ] [ Training Plan ] [ Profile Setting ]
+                            ```
 
----
+                            Recommended image size:
 
-## วิธีติดตั้ง
+                            ```text
+                            2500 x 1686 px
+                            ```
 
-### 1. ติดตั้ง dependencies
-```bash
-npm install
-```
+                            Bounds:
 
-### 2. ตั้งค่า Environment Variables
-```bash
-cp .env.example .env
-# แล้วแก้ไขค่าใน .env ให้ครบ
-```
+                            ```text
+                            Today Coach:     x 0,    y 0,   w 2500, h 843, action=today_coach
+                            Stat:            x 0,    y 843, w 833,  h 843, action=stat
+                            Training Plan:   x 833,  y 843, w 834,  h 843, action=training_plan
+                            Profile Setting: x 1667, y 843, w 833,  h 843, action=profile_setting
+                            ```
 
-### 3. Deploy ขึ้น Render
-1. ไปที่ render.com → New Web Service → Build and deploy from GitHub
-2. ใส่ Environment Variables จาก .env
-3. จะได้ URL เช่น https://strava-line-bot.onrender.com
+                            Quick replies:
 
-### 4. ตั้ง Webhook ใน LINE
-1. ไปที่ LINE Developers Console
-2. Messaging API → Webhook URL
-3. ใส่: `https://strava-line-bot.onrender.com/webhook`
-4. กด Verify ✅
+                            - `Today Coach`: today training, rest check, run or weight, adjust plan
+                            - - `Stat`: today, this week, this month, last 3 months
+                              - - `Training Plan`: today's plan, this week's plan, goal status, update goal
+                                - - `Profile Setting`: HR Zone setup, view profile, edit Max HR, edit Resting HR
+                                 
+                                  - See `docs/future-rich-menu-plan.md` for the full plan.
+                                 
+                                  - ## Weight Training Workflow
+                                 
+                                  - Weight Training is a guided flow:
+                                 
+                                  - 1. Choose focus: legs, core, injury prevention, full body
+                                    2. 2. Choose duration: 10, 20, 30 minutes
+                                       3. 3. Choose equipment: none, dumbbell, band, gym
+                                          4. 4. Receive a rich message workout plan
+                                             5. 5. Tap done, lighter, or heavier
+                                                6. 6. After done, answer feedback: too light, good, too heavy
+                                                   7. 7. Feedback is saved for future personalization
+                                                     
+                                                      8. Workflow session state is stored in the database, not only server memory, so Render restarts are safer.
+                                                     
+                                                      9. ## Important Files
+                                                     
+                                                      10. - `AGENTS.md` - project rules and context for Codex across computers
+                                                          - - `index.js` - main LINE bot, workflows, rich messages, webhook handling
+                                                            - - `package.json` - scripts and dependencies
+                                                              - - `tests/workflow-static.test.js` - static workflow coverage
+                                                                - - `docs/future-rich-menu-plan.md` - rich menu v1 plan and bounds
+                                                                  - - `src/db/migrations.js` - database migrations
+                                                                    - - `src/security/tokenCrypto.js` - token encryption
+                                                                      - - `src/security/lineSignature.js` - LINE signature validation
+                                                                        - - `src/services/lineService.js` - LINE reply/push helpers
+                                                                         
+                                                                          - ## Environment Variables
+                                                                         
+                                                                          - Required production variables include:
+                                                                         
+                                                                          - - `LINE_CHANNEL_ACCESS_TOKEN`
+                                                                            - - `LINE_CHANNEL_SECRET`
+                                                                              - - `ANTHROPIC_API_KEY`
+                                                                                - - `DATABASE_URL`
+                                                                                  - - `TOKEN_ENCRYPTION_KEY`
+                                                                                   
+                                                                                    - Do not commit real secrets. `TOKEN_ENCRYPTION_KEY` is required in production so Strava tokens can be encrypted at rest.
+                                                                                   
+                                                                                    - ## Local Development
+                                                                                   
+                                                                                    - Install dependencies:
+                                                                                   
+                                                                                    - ```bash
+                                                                                      npm install
+                                                                                      ```
 
-### 5. สร้าง Rich Menu
-```bash
-node setup-richmenu.js
-```
-แล้วอัปโหลดรูป Rich Menu ใน LINE Developers Console
+                                                                                      Run locally:
 
-### 6. เชื่อม Strava
-- เปิด LINE Bot แล้วพิมพ์ `/connect`
-- กดลิงก์ที่ได้ เพื่ออนุญาต Strava
-- เสร็จแล้วใช้งานได้เลย! 🎉
+                                                                                      ```bash
+                                                                                      npm run dev
+                                                                                      ```
 
----
+                                                                                      Run production command locally:
 
-## โครงสร้างไฟล์
-```
-strava-line-bot/
-├── index.js          # Main server
-├── setup-richmenu.js # สร้าง Rich Menu
-├── package.json
-├── .env.example      # Template ค่า config
-└── README.md
-```
+                                                                                      ```bash
+                                                                                      npm start
+                                                                                      ```
 
----
+                                                                                      ## Testing
 
-## API Keys ที่ต้องการ
+                                                                                      Syntax check:
 
-| Key | ได้จากไหน | ฟรีไหม |
-|-----|-----------|--------|
-| LINE_CHANNEL_ACCESS_TOKEN | developers.line.biz | ✅ ฟรี |
-| LINE_CHANNEL_SECRET | developers.line.biz | ✅ ฟรี |
-| ANTHROPIC_API_KEY | console.anthropic.com | 💰 จ่ายตามใช้ |
-| STRAVA_CLIENT_ID | strava.com/settings/api | ✅ ฟรี |
-| STRAVA_CLIENT_SECRET | strava.com/settings/api | ✅ ฟรี |
+                                                                                      ```bash
+                                                                                      node --check index.js
+                                                                                      ```
+
+                                                                                      Workflow static tests:
+
+                                                                                      ```bash
+                                                                                      npm test
+                                                                                      ```
+
+                                                                                      Production health check:
+
+                                                                                      ```text
+                                                                                      https://strava-line-bot.onrender.com/health
+                                                                                      ```
+
+                                                                                      ## Deployment Notes
+
+                                                                                      The app deploys from GitHub to Render.
+
+                                                                                      After production-facing changes:
+
+                                                                                      1. Commit to GitHub main
+                                                                                      2. 2. Wait for Render auto-deploy to become live
+                                                                                         3. 3. Check `/health`
+                                                                                            4. 4. For LINE Rich Menu changes, verify the actual rich menu through LINE API or LINE Official Account Manager
+                                                                                              
+                                                                                               5. ## Working With Codex
+                                                                                              
+                                                                                               6. Before asking Codex to change the project, make sure the repo contains `AGENTS.md`. Codex should read:
+                                                                                              
+                                                                                               7. - `AGENTS.md`
+                                                                                                  - - `README.md`
+                                                                                                    - - Relevant docs
+                                                                                                      - - Relevant source files
+                                                                                                       
+                                                                                                        - Suggested prompt:
+                                                                                                       
+                                                                                                        - ```text
+                                                                                                          Read AGENTS.md, README.md, and relevant docs first.
+
+                                                                                                          Task:
+                                                                                                          [describe the task here]
+
+                                                                                                          Rules:
+                                                                                                          - Inspect relevant files before editing
+                                                                                                          - Do not rewrite the whole project
+                                                                                                          - Do not change unrelated files
+                                                                                                          - Make the smallest safe patch
+                                                                                                          - Preserve existing behavior unless I explicitly ask to change it
+                                                                                                          - Explain the cause before fixing if this is a bug
+                                                                                                          - After editing, summarize changed files
+                                                                                                          - Tell me how to test the result
+                                                                                                          ```
+                                                                                                          
