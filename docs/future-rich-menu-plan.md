@@ -12,12 +12,52 @@
 ## Rich Menu Structure
 
 ```text
-Rich Menu
-├─ Stat
-├─ Training Plan
-├─ Weight Training
-├─ Q&A with coach
-└─ Profile Setting
+Rich Menu v1
+┌──────────────────────────────┐
+│ Today Coach                  │
+├──────────┬──────────┬────────┤
+│ Stat     │ Training │ Profile│
+│          │ Plan     │ Setting│
+└──────────┴──────────┴────────┘
+```
+
+หลักการเรียงตามความสำคัญและความถี่ในการกด:
+
+1. `Today Coach` อยู่ช่องใหญ่ที่สุดด้านบน เพราะเป็นปุ่มหลักที่ผู้ใช้ควรกดบ่อยสุด
+2. `Stat` อยู่ช่องล่าง สำหรับดูย้อนหลังว่าเมื่อก่อนเป็นยังไง
+3. `Training Plan` อยู่ช่องล่าง สำหรับดูว่าต่อไปต้องซ้อมอะไรและจัดการเป้าหมาย
+4. `Profile Setting` อยู่ช่องล่าง สำหรับตั้งค่า HR Zone และข้อมูลส่วนตัว
+
+`Weight Training` ไม่อยู่เป็นช่องหลักใน v1 นี้ แต่ให้เข้าได้จาก `Today Coach` หรือ `Training Plan` เมื่อคำแนะนำบอกว่าควรเล่นเวท
+
+## 0. Today Coach
+
+ใช้เป็นปุ่มหลักของแอปสำหรับตอบคำถามว่า "วันนี้ควรทำอะไร"
+
+ตัวเลือกหลังจากกด `Today Coach`:
+
+```text
+Today Coach
+- วันนี้ควรซ้อมอะไร
+- ควรพักไหม
+- วิ่งเบาหรือเวทดี
+- ปรับแผนให้หน่อย
+```
+
+Flow:
+
+```text
+User กด Today Coach
+→ Bot ส่ง Quick Reply ให้เลือกคำถามหลัก
+→ User เลือกคำถาม
+→ Bot ดูข้อมูลล่าสุด เช่น running load, recovery, weight training feedback, goal
+→ Bot แนะนำวันนี้ว่าควรวิ่ง, พัก, เวท หรือปรับแผน
+```
+
+สรุป:
+
+```text
+Today Coach = วันนี้ควรทำอะไร
 ```
 
 ## 1. Stat
@@ -200,8 +240,8 @@ Zone 5 = หนักมาก ใช้เป็นช่วงสั้น ๆ
 
 ## Implementation Notes
 
-- รอบแรกให้เพิ่มเฉพาะเอกสารแผน ไม่แก้ไฟล์หลักของระบบ
-- เมื่อต้อง implement จริง ให้เริ่มจาก rich menu action mapping ก่อน
-- จากนั้นค่อยเพิ่ม Quick Reply / Flex Message สำหรับ `Stat` และ `Training Plan`
+- รอบแรกของ 4-slot rich menu ให้เริ่มจาก backend action mapping และ Quick Reply ก่อน
+- จากนั้นค่อยอัปโหลดรูป rich menu ใหม่เมื่อ asset พร้อม
+- Rich Menu action ที่ควรรองรับคือ `today_coach`, `stat`, `training_plan`, `profile_setting`
+- จากนั้นค่อยเพิ่ม Quick Reply / Flex Message สำหรับ `Stat`, `Training Plan`, `Today Coach`, และ `Profile Setting`
 - `Profile Setting` ควรแยกเป็น LIFF / mini web เพื่อให้ UX กรอกข้อมูลดีขึ้น
-
