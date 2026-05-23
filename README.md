@@ -20,6 +20,24 @@
 | Profile Setting | ตั้งค่า HR Zone และข้อมูลส่วนตัว |
 | Weight Training | ให้ bot ถามเป็นขั้นตอน แล้วส่งโปรแกรมเวทให้ |
 
+## Profile Setting LIFF
+
+ปุ่ม `Profile Setting` เปิดหน้า LIFF สำหรับแก้ข้อมูลโปรไฟล์และ HR Zone ในหน้าเดียว
+
+ตั้งค่า LIFF endpoint ใน LINE Developers เป็น:
+
+```text
+https://strava-line-bot.onrender.com/liff/profile
+```
+
+แล้วใส่ LIFF ID ใน Render:
+
+```text
+PROFILE_LIFF_ID=xxxxxxxxxx-xxxxxxxx
+```
+
+ถ้ายังไม่ตั้ง `PROFILE_LIFF_ID` bot จะ fallback ไปเปิด URL ตรงของ `/liff/profile` สำหรับทดสอบ
+
 ## Rich Menu แบบใหม่
 
 แผน Rich Menu รอบถัดไปจะทำให้เมนูสะอาดขึ้น เหลือ 4 ช่องหลัก

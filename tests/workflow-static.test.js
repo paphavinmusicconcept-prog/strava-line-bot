@@ -31,6 +31,8 @@ includesAll(indexSource, [
   "\"action=stat\": \"stat\"",
   "\"action=training_plan\": \"training_plan\"",
   "\"action=profile_setting\": \"profile_setting\"",
+  "\"action=profile_setup\": \"profile_setup\"",
+  "\"action=profile_goal\": \"profile_goal\"",
   "if (action === \"today_coach\")",
   "if (action === \"stat\")",
   "if (action === \"training_plan\")",
@@ -47,6 +49,38 @@ includesAll(indexSource, [
 assert(
   !indexSource.includes("ช่วยแนะนำ recovery และ weight training จากข้อมูลการวิ่งล่าสุดของผม"),
   "Expected old recovery AI shortcut to be removed"
+);
+
+includesAll(indexSource, [
+  "createProfileRepository",
+  "calculateHrZones",
+  "validateProfileInput",
+  "app.get(\"/liff/profile\"",
+  "app.get(\"/api/profile/config\"",
+  "app.get(\"/api/profile\"",
+  "app.post(\"/api/profile\"",
+  "buildProfileSettingFlexMessage",
+  "buildProfileSummaryFlexMessage",
+  "dbSaveRunnerProfile",
+  "dbGetRunnerProfile",
+]);
+
+includesAll(
+  fs.readFileSync(path.join(root, "migrations", "002_user_profiles.sql"), "utf8"),
+  [
+    "CREATE TABLE IF NOT EXISTS user_profiles",
+    "hr_zones JSONB NOT NULL DEFAULT '{}'::jsonb",
+  ]
+);
+
+includesAll(
+  fs.readFileSync(path.join(root, "src", "utils", "hrZones.js"), "utf8"),
+  [
+    "function calculateHrZones",
+    "function validateProfileInput",
+    "karvonen",
+    "age_estimated",
+  ]
 );
 
 includesAll(indexSource, [

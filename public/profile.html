@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profile Setting</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --primary: #06c755;
+      --primary-dark: #049f45;
+      --danger: #b91c1c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(100%, 720px);
+      margin: 0 auto;
+      padding: 20px 16px 32px;
+    }
+
+    header {
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0 0 4px;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: #374151;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: var(--text);
+      background: #ffffff;
+      font: inherit;
+      font-size: 16px;
+    }
+
+    input:focus,
+    select:focus {
+      outline: 2px solid rgba(6, 199, 85, 0.25);
+      border-color: var(--primary);
+    }
+
+    .row {
+      display: grid;
+      gap: 12px;
+    }
+
+    @media (min-width: 640px) {
+      .row {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .zones {
+      display: grid;
+      gap: 8px;
+      margin-top: 4px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .zone {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 4px;
+    }
+
+    button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 14px;
+      background: var(--primary);
+      color: #ffffff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    .secondary {
+      background: #eef2f7;
+      color: #374151;
+    }
+
+    .status {
+      min-height: 22px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    .success {
+      color: #047857;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Profile Setting</h1>
+      <p>ตั้งค่าข้อมูลร่างกาย เป้าหมาย และ HR Zone สำหรับให้ coach ใช้แนะนำได้แม่นขึ้น</p>
+    </header>
+
+    <form id="profile-form">
+      <label>
+        ชื่อที่อยากให้ coach เรียก
+        <input id="displayName" name="displayName" autocomplete="name" maxlength="40" required>
+      </label>
+
+      <div class="row">
+        <label>
+          อายุ
+          <input id="age" name="age" type="number" inputmode="numeric" min="10" max="90" required>
+        </label>
+        <label>
+          วันซ้อมต่อสัปดาห์
+          <select id="trainingDaysPerWeek" name="trainingDaysPerWeek" required>
+            <option value="">เลือก</option>
+            <option value="3">3 วัน</option>
+            <option value="4">4 วัน</option>
+            <option value="5">5 วัน</option>
+            <option value="6">6 วัน</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row">
+        <label>
+          Resting HR
+          <input id="restingHr" name="restingHr" type="number" inputmode="numeric" min="35" max="100" placeholder="ยังไม่รู้ เว้นว่างได้">
+          <span class="hint">ถ้าไม่รู้ ระบบจะคำนวณจาก Max HR หรืออายุก่อน</span>
+        </label>
+        <label>
+          Max HR
+          <input id="maxHr" name="maxHr" type="number" inputmode="numeric" min="120" max="230" placeholder="เว้นว่างเพื่อคำนวณจากอายุ">
+          <span class="hint">ถ้าเว้นว่างจะใช้ 220 - อายุ และเก็บเป็นค่า estimate</span>
+        </label>
+      </div>
+
+      <label>
+        เป้าหมายหลัก
+        <select id="goalType" name="goalType" required>
+          <option value="">เลือกเป้าหมาย</option>
+          <option value="fat_loss">ลดไขมัน</option>
+          <option value="run_10k">วิ่ง 10K</option>
+          <option value="half_marathon">Half Marathon</option>
+          <option value="marathon">Marathon</option>
+          <option value="health">สุขภาพ</option>
+        </select>
+      </label>
+
+      <section class="zones" id="zones" aria-live="polite"></section>
+
+      <div class="actions">
+        <button id="save" type="submit">บันทึกโปรไฟล์</button>
+        <button class="secondary" id="close" type="button">ปิด</button>
+      </div>
+
+      <div class="status" id="status"></div>
+    </form>
+  </main>
+
+  <script>
+    const state = {
+      liffId: "",
+      lineUserId: new URLSearchParams(window.location.search).get("userId") || "",
+      idToken: "",
+    };
+
+    const zoneLabels = {
+      zone1: "ฟื้นฟู",
+      zone2: "วิ่งสบาย สร้างฐาน",
+      zone3: "เทมโปเบา",
+      zone4: "หนัก ช่วยความเร็ว",
+      zone5: "หนักมาก ใช้เป็นช่วงสั้น ๆ",
+    };
+
+    const zoneColors = {
+      zone1: ["#e0f2fe", "#0369a1"],
+      zone2: ["#dcfce7", "#15803d"],
+      zone3: ["#fef9c3", "#a16207"],
+      zone4: ["#ffedd5", "#c2410c"],
+      zone5: ["#fee2e2", "#b91c1c"],
+    };
+
+    const form = document.getElementById("profile-form");
+    const statusEl = document.getElementById("status");
+    const zonesEl = document.getElementById("zones");
+
+    function setStatus(message, type = "") {
+      statusEl.className = `status ${type}`;
+      statusEl.textContent = message;
+    }
+
+    function numberOrNull(value) {
+      if (value === "") return null;
+      const parsed = Number.parseInt(value, 10);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function formPayload() {
+      return {
+        lineUserId: state.lineUserId,
+        idToken: state.idToken,
+        displayName: document.getElementById("displayName").value.trim(),
+        age: numberOrNull(document.getElementById("age").value),
+        restingHr: numberOrNull(document.getElementById("restingHr").value),
+        maxHr: numberOrNull(document.getElementById("maxHr").value),
+        goalType: document.getElementById("goalType").value,
+        trainingDaysPerWeek: numberOrNull(document.getElementById("trainingDaysPerWeek").value),
+      };
+    }
+
+    function calculateZones(payload) {
+      const age = payload.age;
+      const restingHr = payload.restingHr;
+      const maxHr = payload.maxHr || (age ? 220 - age : null);
+      if (!maxHr) return {};
+
+      const raw = {};
+      if (restingHr) {
+        const hrr = maxHr - restingHr;
+        raw.zone1 = [restingHr + hrr * 0.5, restingHr + hrr * 0.6];
+        raw.zone2 = [restingHr + hrr * 0.6, restingHr + hrr * 0.7];
+        raw.zone3 = [restingHr + hrr * 0.7, restingHr + hrr * 0.8];
+        raw.zone4 = [restingHr + hrr * 0.8, restingHr + hrr * 0.9];
+        raw.zone5 = [restingHr + hrr * 0.9, maxHr];
+      } else {
+        raw.zone1 = [maxHr * 0.5, maxHr * 0.6];
+        raw.zone2 = [maxHr * 0.6, maxHr * 0.7];
+        raw.zone3 = [maxHr * 0.7, maxHr * 0.8];
+        raw.zone4 = [maxHr * 0.8, maxHr * 0.9];
+        raw.zone5 = [maxHr * 0.9, maxHr];
+      }
+
+      const zones = {};
+      let previousMax = null;
+      Object.keys(raw).forEach((key) => {
+        const min = previousMax === null ? Math.round(raw[key][0]) : previousMax + 1;
+        const max = Math.max(min, Math.round(raw[key][1]));
+        zones[key] = { min, max, label: zoneLabels[key] };
+        previousMax = max;
+      });
+      return zones;
+    }
+
+    function renderZones() {
+      const payload = formPayload();
+      const zones = calculateZones(payload);
+      const keys = Object.keys(zones);
+      if (!keys.length) {
+        zonesEl.innerHTML = "<p>กรอกอายุและข้อมูลหัวใจเพื่อดู HR Zone</p>";
+        return;
+      }
+
+      zonesEl.innerHTML = keys.map((key) => {
+        const zone = zones[key];
+        const [bg, color] = zoneColors[key];
+        return `
+          <div class="zone" style="background:${bg};color:${color}">
+            <strong>${key.replace("zone", "Zone ")}</strong>
+            <span>${zone.min}-${zone.max} bpm ${zone.label}</span>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function fillForm(profile) {
+      if (!profile) return;
+      document.getElementById("displayName").value = profile.displayName || "";
+      document.getElementById("age").value = profile.age || "";
+      document.getElementById("restingHr").value = profile.restingHr || "";
+      document.getElementById("maxHr").value = profile.maxHr || "";
+      document.getElementById("goalType").value = profile.goalType || "";
+      document.getElementById("trainingDaysPerWeek").value = profile.trainingDaysPerWeek || "";
+      renderZones();
+    }
+
+    async function loadConfig() {
+      const res = await fetch("/api/profile/config");
+      const config = await res.json();
+      state.liffId = config.liffId || "";
+    }
+
+    async function initLiff() {
+      if (!state.liffId || !window.liff) return;
+      await liff.init({ liffId: state.liffId });
+      if (!liff.isLoggedIn()) {
+        liff.login();
+        return;
+      }
+      const profile = await liff.getProfile();
+      state.lineUserId = profile.userId;
+      state.idToken = liff.getIDToken() || "";
+      if (!document.getElementById("displayName").value) {
+        document.getElementById("displayName").value = profile.displayName || "";
+      }
+    }
+
+    async function loadProfile() {
+      if (!state.lineUserId) return;
+      const res = await fetch(`/api/profile?lineUserId=${encodeURIComponent(state.lineUserId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      fillForm(data.profile);
+    }
+
+    form.addEventListener("input", renderZones);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const saveButton = document.getElementById("save");
+      saveButton.disabled = true;
+      setStatus("กำลังบันทึก...");
+
+      try {
+        const res = await fetch("/api/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(formPayload()),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          const message = data.message || Object.values(data.errors || {})[0] || "บันทึกไม่สำเร็จ";
+          setStatus(message, "error");
+          return;
+        }
+
+        fillForm(data.profile);
+        setStatus("บันทึกโปรไฟล์แล้วครับ", "success");
+      } catch (error) {
+        setStatus("ตอนนี้บันทึกโปรไฟล์ไม่ได้ครับ ลองใหม่อีกครั้งในอีกสักครู่", "error");
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+
+    document.getElementById("close").addEventListener("click", () => {
+      if (window.liff && liff.isInClient()) {
+        liff.closeWindow();
+      } else {
+        window.history.back();
+      }
+    });
+
+    (async function boot() {
+      try {
+        await loadConfig();
+        await initLiff();
+        await loadProfile();
+      } catch (error) {
+        setStatus("เปิด LIFF ไม่สำเร็จ แต่ยังกรอกผ่านหน้านี้ได้ถ้ามี LINE user id", "error");
+      }
+      renderZones();
+    }());
+  </script>
+</body>
+</html>

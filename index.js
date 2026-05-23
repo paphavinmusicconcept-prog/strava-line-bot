@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("path");
 const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
@@ -10,8 +11,15 @@ const { createLineService } = require("./src/services/lineService");
 const { createClaudeService } = require("./src/services/claudeService");
 const { runMigrations } = require("./src/db/migrations");
 const { createActivityRepository } = require("./src/repositories/activityRepository");
+const { createProfileRepository } = require("./src/repositories/profileRepository");
 const { assertRateLimit } = require("./src/services/rateLimitService");
 const { withRetry } = require("./src/utils/retry");
+const {
+  HR_ZONE_COLORS,
+  HR_ZONE_TEXT_COLORS,
+  calculateHrZones,
+  validateProfileInput,
+} = require("./src/utils/hrZones");
 const {
   createActivityFingerprint,
   createContentFingerprint,
@@ -23,6 +31,7 @@ app.use(express.json({
     req.rawBody = Buffer.from(buf);
   },
 }));
+app.use("/public", express.static(path.join(__dirname, "public")));
 
 const CONFIG = createConfig();
 const dbSsl = createDbSsl();
@@ -49,6 +58,7 @@ const activityRepo = createActivityRepository(db, {
   estimateCadence,
   normalizeLookbackDays,
 });
+const profileRepo = createProfileRepository(db);
 
 async function initDB() {
   try {
@@ -287,6 +297,35 @@ async function dbGetUserProfile(userId) {
   }
 }
 
+async function dbSaveRunnerProfile(userId, profile = {}) {
+  const hr = calculateHrZones({
+    age: profile.age,
+    restingHr: profile.restingHr,
+    maxHr: profile.maxHr,
+  });
+
+  return profileRepo.save(userId, {
+    displayName: profile.displayName,
+    age: profile.age,
+    restingHr: hr.restingHr,
+    maxHr: hr.maxHr,
+    maxHrSource: hr.maxHrSource,
+    goalType: profile.goalType,
+    trainingDaysPerWeek: profile.trainingDaysPerWeek,
+    hrZoneMethod: hr.method,
+    hrZones: hr.zones,
+  });
+}
+
+async function dbGetRunnerProfile(userId) {
+  try {
+    return await profileRepo.findByLineUserId(userId);
+  } catch (e) {
+    logger.error("dbGetRunnerProfile error", { error: e.message });
+    return null;
+  }
+}
+
 const WORKFLOW_SESSION_MEMORY_TYPE = "workflow_session";
 const WORKFLOW_SESSION_TTL_MS = 30 * 60 * 1000;
 
@@ -452,6 +491,7 @@ async function loadUserContext(userId) {
     challenge,
     pr,
     profile,
+    runnerProfile,
     memories,
     history,
   ] = await Promise.all([
@@ -460,6 +500,7 @@ async function loadUserContext(userId) {
     dbGetChallenge(userId),
     dbGetPR(userId),
     dbGetUserProfile(userId),
+    dbGetRunnerProfile(userId),
     dbGetUserMemories(userId, 20),
     getConversationHistory(userId, 12),
   ]);
@@ -468,6 +509,19 @@ async function loadUserContext(userId) {
   const stats30 = calcStatsFromActivities(recent30);
 
   let context = `=== USER CONTEXT ===\n`;
+
+  if (runnerProfile) {
+    const z2 = runnerProfile.hrZones?.zone2;
+    context += `\n=== RUNNER PROFILE ===\n`;
+    context += `Name: ${runnerProfile.displayName || "-"}\n`;
+    context += `Age: ${runnerProfile.age || "-"}\n`;
+    context += `Goal: ${runnerProfile.goalType || "-"}\n`;
+    context += `Training Days/Week: ${runnerProfile.trainingDaysPerWeek || "-"}\n`;
+    context += `Resting HR: ${runnerProfile.restingHr || "-"} bpm\n`;
+    context += `Max HR: ${runnerProfile.maxHr || "-"} bpm (${runnerProfile.maxHrSource || "-"})\n`;
+    context += `HR Zone Method: ${runnerProfile.hrZoneMethod || "-"}\n`;
+    if (z2) context += `HR Zone 2: ${z2.min}-${z2.max} bpm ${z2.label}\n`;
+  }
 
   if (profile) {
     context += `\n=== PROFILE ===\n`;
@@ -515,7 +569,7 @@ async function loadUserContext(userId) {
     context += `Fastest Pace: ${pr.fastestPace} /km\n`;
   }
 
-  return { context, history, profile, memories, recent7, recent30, challenge, pr };
+  return { context, history, profile, runnerProfile, memories, recent7, recent30, challenge, pr };
 }
 
 async function extractMemoryFromChat(userId, userText, assistantText) {
@@ -2326,10 +2380,12 @@ function normalizeMenuAction(value = "") {
     "action=run_or_weight": "run_or_weight",
     "action=adjust_plan": "adjust_plan",
     "action=profile_setting": "profile_setting",
+    "action=profile_setup": "profile_setup",
     "action=profile_hr_zone": "profile_hr_zone",
     "action=profile_view": "profile_view",
     "action=profile_max_hr": "profile_max_hr",
     "action=profile_resting_hr": "profile_resting_hr",
+    "action=profile_goal": "profile_goal",
     "action=recovery": "weight_training",
     "action=strength": "weight_training",
     "action=weight_training": "weight_training",
@@ -2366,11 +2422,14 @@ function normalizeMenuAction(value = "") {
     "วิ่งเบาหรือเวทดี": "run_or_weight",
     "ปรับแผนให้หน่อย": "adjust_plan",
     "profile setting": "profile_setting",
-    "ตั้งค่าโปรไฟล์": "profile_setting",
+    "ตั้งค่าโปรไฟล์": "profile_setup",
+    "แก้โปรไฟล์": "profile_setup",
     "ตั้งค่า hr zone": "profile_hr_zone",
+    "แก้ hr zone": "profile_hr_zone",
     "ดูโปรไฟล์": "profile_view",
     "แก้ max hr": "profile_max_hr",
     "แก้ resting hr": "profile_resting_hr",
+    "แก้เป้าหมาย": "profile_goal",
     "ถามตอบอาจารย์นักวิ่ง": "chat",
     "วิเคราะห์ recovery": "weight_training",
     "วิเคราะห์ recovery/strength": "weight_training",
@@ -2410,6 +2469,187 @@ function buildMenuQuickReply(options) {
 
 async function replyRichMenuQuickChoices(replyToken, title, options) {
   await replyText(replyToken, title, buildMenuQuickReply(options));
+}
+
+const PROFILE_GOAL_LABELS = {
+  fat_loss: "ลดไขมัน",
+  run_10k: "วิ่ง 10K",
+  half_marathon: "Half Marathon",
+  marathon: "Marathon",
+  health: "สุขภาพ",
+};
+
+function getProfileLiffUrl(mode = "edit", userId = "") {
+  if (CONFIG.PROFILE_LIFF_ID) {
+    return `https://liff.line.me/${CONFIG.PROFILE_LIFF_ID}?mode=${encodeURIComponent(mode)}`;
+  }
+
+  const baseUrl = String(CONFIG.SERVER_URL || "").replace(/\/$/, "");
+  const params = new URLSearchParams({ mode });
+  if (userId) params.set("userId", userId);
+  return `${baseUrl}/liff/profile?${params.toString()}`;
+}
+
+function buildProfileSettingFlexMessage(userId = "") {
+  const liffUrl = getProfileLiffUrl("edit", userId);
+
+  return {
+    type: "flex",
+    altText: "Profile Setting",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          {
+            type: "text",
+            text: "Profile Setting",
+            weight: "bold",
+            size: "xl",
+            color: "#111827",
+          },
+          {
+            type: "text",
+            text: "ตั้งค่าข้อมูลร่างกาย เป้าหมาย และ HR Zone เพื่อให้ coach แนะนำได้แม่นขึ้น",
+            size: "sm",
+            color: "#4B5563",
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#06C755",
+            action: {
+              type: "uri",
+              label: "เปิดหน้าโปรไฟล์",
+              uri: liffUrl,
+            },
+          },
+          {
+            type: "button",
+            style: "secondary",
+            action: {
+              type: "postback",
+              label: "ดูโปรไฟล์",
+              data: "action=profile_view",
+              displayText: "ดูโปรไฟล์",
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+function buildProfileSummaryFlexMessage(profile, userId = "") {
+  const zones = profile?.hrZones || {};
+  const zoneRows = ["zone1", "zone2", "zone3", "zone4", "zone5"]
+    .filter(key => zones[key])
+    .map(key => ({
+      type: "box",
+      layout: "horizontal",
+      spacing: "sm",
+      backgroundColor: HR_ZONE_COLORS[key] || "#F3F4F6",
+      cornerRadius: "6px",
+      paddingAll: "8px",
+      contents: [
+        {
+          type: "text",
+          text: key.replace("zone", "Zone "),
+          size: "xs",
+          weight: "bold",
+          color: HR_ZONE_TEXT_COLORS[key] || "#374151",
+          flex: 2,
+        },
+        {
+          type: "text",
+          text: `${zones[key].min}-${zones[key].max} bpm ${zones[key].label}`,
+          size: "xs",
+          color: HR_ZONE_TEXT_COLORS[key] || "#374151",
+          align: "end",
+          wrap: true,
+          flex: 5,
+        },
+      ],
+    }));
+
+  return {
+    type: "flex",
+    altText: "Profile Summary",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          {
+            type: "text",
+            text: "Profile",
+            weight: "bold",
+            size: "xl",
+            color: "#111827",
+          },
+          {
+            type: "text",
+            text: `ชื่อ: ${profile.displayName || "-"} | อายุ: ${profile.age || "-"}`,
+            size: "sm",
+            color: "#374151",
+            wrap: true,
+          },
+          {
+            type: "text",
+            text: `เป้าหมาย: ${PROFILE_GOAL_LABELS[profile.goalType] || "-"} | ซ้อม ${profile.trainingDaysPerWeek || "-"} วัน/สัปดาห์`,
+            size: "sm",
+            color: "#374151",
+            wrap: true,
+          },
+          {
+            type: "text",
+            text: `Resting HR: ${profile.restingHr || "-"} bpm | Max HR: ${profile.maxHr || "-"} bpm`,
+            size: "sm",
+            color: "#374151",
+            wrap: true,
+          },
+          {
+            type: "text",
+            text: `HR Zone Method: ${profile.hrZoneMethod || "-"}`,
+            size: "xs",
+            color: "#6B7280",
+            wrap: true,
+          },
+          { type: "separator", margin: "md" },
+          ...zoneRows,
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#06C755",
+            action: {
+              type: "uri",
+              label: "แก้โปรไฟล์",
+              uri: getProfileLiffUrl("edit", userId),
+            },
+          },
+        ],
+      },
+    },
+  };
 }
 
 function analyzeRunningLoadForWeightTraining(activities = [], feedbackText = "") {
@@ -2854,12 +3094,7 @@ async function handleMenuAction(userId, action, replyToken) {
   }
 
   if (action === "profile_setting") {
-    await replyRichMenuQuickChoices(replyToken, "อยากตั้งค่าข้อมูลส่วนไหนครับ", [
-      { label: "ตั้งค่า HR Zone", text: "ตั้งค่า HR Zone" },
-      { label: "ดูโปรไฟล์", text: "ดูโปรไฟล์" },
-      { label: "แก้ Max HR", text: "แก้ Max HR" },
-      { label: "แก้ Resting HR", text: "แก้ Resting HR" },
-    ]);
+    await replyFlex(replyToken, buildProfileSettingFlexMessage(userId));
     return true;
   }
 
@@ -2985,32 +3220,31 @@ async function handleMenuAction(userId, action, replyToken) {
     return true;
   }
 
-  if (action === "profile_hr_zone") {
-    await replyText(replyToken, "ส่งค่า Resting HR และ Max HR มาได้เลยครับ เช่น Resting HR 55, Max HR 185 เดี๋ยวผมช่วยจำไว้ใช้คำนวณ HR Zone");
+  if (
+    action === "profile_setup" ||
+    action === "profile_hr_zone" ||
+    action === "profile_max_hr" ||
+    action === "profile_resting_hr" ||
+    action === "profile_goal"
+  ) {
+    await replyFlex(replyToken, buildProfileSettingFlexMessage(userId));
     return true;
   }
 
   if (action === "profile_view") {
-    const profile = await dbGetUserProfile(userId);
+    const profile = await dbGetRunnerProfile(userId);
     if (!profile) {
-      await replyText(replyToken, "ยังไม่มีโปรไฟล์ที่บันทึกไว้ครับ ส่งข้อมูล เช่น อายุ, Resting HR, Max HR, เป้าหมายการวิ่ง มาให้ผมจำได้เลย");
+      await replyMessage(replyToken, [
+        {
+          type: "text",
+          text: "ยังไม่มีโปรไฟล์ครับ ตั้งค่าโปรไฟล์ก่อน เพื่อให้ coach แนะนำได้แม่นขึ้น",
+        },
+        buildProfileSettingFlexMessage(userId),
+      ]);
       return true;
     }
 
-    await replyText(
-      replyToken,
-      `โปรไฟล์ของคุณ\nGoal: ${profile.goal || "-"}\nTarget Distance: ${profile.target_distance || "-"} km\nTarget Pace: ${profile.target_pace || "-"}\nRunning Level: ${profile.running_level || "-"}`
-    );
-    return true;
-  }
-
-  if (action === "profile_max_hr") {
-    await replyText(replyToken, "ส่ง Max HR ใหม่มาได้เลยครับ เช่น Max HR 185");
-    return true;
-  }
-
-  if (action === "profile_resting_hr") {
-    await replyText(replyToken, "ส่ง Resting HR ใหม่มาได้เลยครับ เช่น Resting HR 55");
+    await replyFlex(replyToken, buildProfileSummaryFlexMessage(profile, userId));
     return true;
   }
 
@@ -3044,6 +3278,95 @@ async function enforceEventRateLimit(userId, event) {
 
   return false;
 }
+
+function publicProfile(profile) {
+  if (!profile) return null;
+
+  return {
+    lineUserId: profile.lineUserId,
+    displayName: profile.displayName,
+    age: profile.age,
+    restingHr: profile.restingHr,
+    maxHr: profile.maxHr,
+    maxHrSource: profile.maxHrSource,
+    goalType: profile.goalType,
+    trainingDaysPerWeek: profile.trainingDaysPerWeek,
+    hrZoneMethod: profile.hrZoneMethod,
+    hrZones: profile.hrZones || {},
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function getLineUserIdFromRequest(req) {
+  return String(
+    req.body?.lineUserId ||
+    req.query?.lineUserId ||
+    ""
+  ).trim();
+}
+
+// ===== LIFF PROFILE =====
+app.get("/liff/profile", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "profile.html"));
+});
+
+app.get("/api/profile/config", (req, res) => {
+  res.json({
+    liffId: CONFIG.PROFILE_LIFF_ID || "",
+  });
+});
+
+app.get("/api/profile", async (req, res) => {
+  const lineUserId = getLineUserIdFromRequest(req);
+  if (!lineUserId) {
+    return res.status(400).json({
+      message: "missing lineUserId",
+    });
+  }
+
+  const profile = await dbGetRunnerProfile(lineUserId);
+  return res.json({
+    profile: publicProfile(profile),
+  });
+});
+
+app.post("/api/profile", async (req, res) => {
+  const lineUserId = getLineUserIdFromRequest(req);
+  if (!lineUserId) {
+    return res.status(400).json({
+      message: "เปิดจาก LINE LIFF ก่อนบันทึกโปรไฟล์ครับ",
+    });
+  }
+
+  const validation = validateProfileInput(req.body || {});
+  if (!validation.valid) {
+    return res.status(400).json({
+      message: "ข้อมูลโปรไฟล์ยังไม่ครบหรือไม่ถูกต้อง",
+      errors: validation.errors,
+    });
+  }
+
+  try {
+    const saved = await dbSaveRunnerProfile(lineUserId, validation.value);
+    try {
+      await pushMessage(
+        lineUserId,
+        "บันทึกโปรไฟล์แล้วครับ ต่อไป coach จะใช้ HR Zone นี้ตอนสรุปผลวิ่งและแนะนำการซ้อม"
+      );
+    } catch (e) {
+      logger.warn("Profile save push failed", { error: e.message });
+    }
+
+    return res.json({
+      profile: publicProfile(saved),
+    });
+  } catch (e) {
+    logger.error("Profile save failed", { error: e.message });
+    return res.status(500).json({
+      message: "ตอนนี้บันทึกโปรไฟล์ไม่ได้ครับ ลองใหม่อีกครั้งในอีกสักครู่",
+    });
+  }
+});
 
 // ===== WEBHOOK =====
 app.post("/webhook", async (req, res) => {

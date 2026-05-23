@@ -7,6 +7,7 @@ function createConfig(env = process.env) {
     STRAVA_CLIENT_SECRET: env.STRAVA_CLIENT_SECRET,
     RAPIDAPI_KEY: env.RAPIDAPI_KEY,
     SERVER_URL: env.SERVER_URL || "https://strava-line-bot.onrender.com",
+    PROFILE_LIFF_ID: env.PROFILE_LIFF_ID || env.LINE_LIFF_ID,
     TOKEN_ENCRYPTION_KEY: env.TOKEN_ENCRYPTION_KEY,
   };
 }
